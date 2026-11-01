@@ -565,9 +565,7 @@ async def test_ui_language_is_read_off_the_event_loop(monkeypatch):
 
     monkeypatch.setattr(chat_title, "_ui_language", _record)
     monkeypatch.setattr(chat_title, "run_bg_oneliner", _fake_oneliner)
-    await chat_title._generate_title_via_kiro(
-        SimpleNamespace(sessions=SimpleNamespace()), _msgs()
-    )
+    await chat_title._generate_title_via_kiro(SimpleNamespace(sessions=SimpleNamespace()), _msgs())
     assert seen["thread"] != loop_thread
 
 
@@ -818,9 +816,7 @@ def test_refresh_prompt_also_explains_a_shortened_line():
     refresh transcript carries a marker its instructions never explain, while
     the initial prompt stays correct.
     """
-    prompt = _build_refresh_prompt(
-        [{"role": "user", "content": _MIDWORD_UNIT * 40}], "Old title"
-    )
+    prompt = _build_refresh_prompt([{"role": "user", "content": _MIDWORD_UNIT * 40}], "Old title")
     assert prompt is not None
     assert _excerpt_of(prompt).endswith(_TITLE_TRUNCATION_MARKER)
     assert _TITLE_TRUNCATION_NOTE.strip() in _head_of(prompt)
@@ -834,9 +830,7 @@ def test_refresh_note_precedes_the_keep_contract():
     Break-arm: move the {truncation} slot after the KEEP block -> the ordering
     flips and the note interposes between the contract and the transcript.
     """
-    prompt = _build_refresh_prompt(
-        [{"role": "user", "content": _MIDWORD_UNIT * 40}], "Old title"
-    )
+    prompt = _build_refresh_prompt([{"role": "user", "content": _MIDWORD_UNIT * 40}], "Old title")
     assert prompt is not None
     head = _head_of(prompt)
     assert head.index(_TITLE_TRUNCATION_NOTE.strip()) < head.index("exactly KEEP")
@@ -941,7 +935,9 @@ class TestSlotTitleRouteRefusalCodes:
 # ASCII; the runtime values are the Hangul sentences.
 
 # "haedang lingkeue jeopgeunhal su eopseumnida" -- "I cannot access that link"
-_KO_REFUSAL_SHORT = "\ud574\ub2f9 \ub9c1\ud06c\uc5d0 \uc811\uadfc\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4"
+_KO_REFUSAL_SHORT = (
+    "\ud574\ub2f9 \ub9c1\ud06c\uc5d0 \uc811\uadfc\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4"
+)
 # "joesonghajiman ... eopseumnida" -- "Sorry, I cannot open the external link,
 # so I cannot tell what the conversation is about"
 _KO_REFUSAL_LONG = (
@@ -1188,3 +1184,46 @@ class TestTitleCallBounds:
         sessions = _StubBgSessions(STOP_REASON_END_TURN)
         title = await chat_title._generate_title_via_kiro(SimpleNamespace(sessions=sessions), [{}])
         assert title == _PARTIAL_TITLE
+
+
+@pytest.mark.asyncio
+async def test_title_uses_the_configured_background_role_model(monkeypatch):
+    """A background pin must reach the titler instead of the free ``auto`` model.
+
+    ``auto`` on OpenCode resolves to its free Big Pickle model; an account whose
+    free quota is spent then gets a timeout on every auto-title. The configured
+    background role is the supported place to point it at a funded model.
+    """
+    seen: dict[str, str] = {}
+
+    class _Agent:
+        @staticmethod
+        def resolve_model(role: str) -> str:
+            assert role == "background"
+            return "opencode-go/deepseek-v4.1-flash"
+
+    cfg = SimpleNamespace(
+        agent=_Agent(),
+        dashboard=SimpleNamespace(language=""),
+    )
+
+    async def _fake_oneliner(_sessions, _prompt, **kwargs):
+        seen["model"] = kwargs["model"]
+        return "Kiro Crew title"
+
+    monkeypatch.setattr(chat_title.KiroCrewConfig, "load", staticmethod(lambda: cfg))
+    monkeypatch.setattr(chat_title, "run_bg_oneliner", _fake_oneliner)
+    title = await chat_title._generate_title_via_kiro(
+        SimpleNamespace(sessions=SimpleNamespace()),
+        [{"role": "user", "content": "a topic worth naming"}],
+    )
+    assert title == "Kiro Crew title"
+    assert seen["model"] == "opencode-go/deepseek-v4.1-flash"
+
+
+def test_title_model_falls_back_to_auto_when_config_is_unreadable(monkeypatch):
+    def _boom():
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(chat_title.KiroCrewConfig, "load", staticmethod(_boom))
+    assert chat_title._resolve_title_model() == "auto"

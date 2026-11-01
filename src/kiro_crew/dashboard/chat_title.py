@@ -191,11 +191,27 @@ _TITLE_SOURCE_SCAN_LIMIT = _TITLE_TEXT_LIMIT + _TITLE_MAX_ATTACHMENT_FILES * (
 # Titling is a trivial 3-6 word task, but it must NOT pin a cheap model by id: a
 # hardcoded model id is not governance-aware, and on an account/partition that
 # does not serve that model the wire rejects it with ``Invalid model ID``.
-# ``"auto"`` means "inherit
-# the session's governed default" — ``run_bg_oneliner`` skips the per-session
-# set_model override for auto, so titling runs on the backend-resolved entitled
-# model instead of a literal the account may not have.
+# The configured ``agent.role_models.background`` is the explicit background pin;
+# when it is empty, ``"auto"`` means "inherit the session's governed default" —
+# ``run_bg_oneliner`` skips the per-session set_model override for auto, so
+# titling runs on the backend-resolved entitled model instead of a literal the
+# account may not have.
 _TITLE_MODEL = "auto"
+
+
+def _resolve_title_model() -> str:
+    """The configured background-role model, or the governed ``auto`` fallback.
+
+    Titles are background work, so they follow the same role pin as the lite and
+    heartbeat workers. A config read failure must not break titling: it falls back
+    to the backend's entitled default exactly as before.
+    """
+    try:
+        return KiroCrewConfig.load().agent.resolve_model("background")
+    except Exception:
+        return _TITLE_MODEL
+
+
 #: Bound on one title call, initial or refresh: the same 30 s the folder icon and
 #: folder suggestion one-liners use. A title that misses it falls back as on error.
 _TITLE_TIMEOUT_SECS = 30.0
@@ -404,8 +420,7 @@ def _attachment_labels(paths: tuple[str, ...]) -> dict[str, str]:
         while depth < len(segments):
             mine = "/".join(segments[-depth:])
             clash = any(
-                other != norm
-                and "/".join([s for s in other.split("/") if s][-depth:]) == mine
+                other != norm and "/".join([s for s in other.split("/") if s][-depth:]) == mine
                 for other in normalized.values()
             )
             if not clash:
@@ -643,9 +658,7 @@ def _prompt_lines(messages: list[dict[str, Any]]) -> tuple[list[str], bool]:
     return lines, truncated
 
 
-def _build_title_prompt(
-    messages: list[dict[str, Any]], *, ui_language: str = ""
-) -> str | None:
+def _build_title_prompt(messages: list[dict[str, Any]], *, ui_language: str = "") -> str | None:
     """Build a title generation prompt from conversation messages.
 
     ``ui_language`` is a validated BCP-47 tag (see ``_ui_language``); ``""``
@@ -766,9 +779,7 @@ async def _reveal_title(
         await asyncio.sleep(_TITLE_REVEAL_STEP_SECS)
 
 
-def _validate_title_reply(
-    text: str, *, control_words: tuple[str, ...] = ("SKIP", "KEEP")
-) -> str:
+def _validate_title_reply(text: str, *, control_words: tuple[str, ...] = ("SKIP", "KEEP")) -> str:
     """Clean, redact and shape-check an LLM title reply; ``""`` means no title.
 
     Shared by the initial titling and the refresh so the two paths cannot drift:
@@ -817,7 +828,10 @@ async def _generate_title_via_kiro(
     # (see its docstring + AUTOSDE no-blocking-call-on-event-loop). Both callers
     # of this coroutine — the aiohttp handler and the auto-title background task
     # — run on the gateway's single loop.
-    ui_language = await asyncio.to_thread(_ui_language)
+    ui_language, title_model = await asyncio.gather(
+        asyncio.to_thread(_ui_language),
+        asyncio.to_thread(_resolve_title_model),
+    )
     prompt = _build_title_prompt(messages, ui_language=ui_language)
     if not prompt:
         logger.debug("Title generation skipped — no usable messages")
@@ -830,7 +844,7 @@ async def _generate_title_via_kiro(
     text = await run_bg_oneliner(
         state.sessions,
         prompt,
-        model=_TITLE_MODEL,
+        model=title_model,
         timeout=_TITLE_TIMEOUT_SECS,
         crew_log_kind="title",
         crew_log_session_key=session_key,
@@ -857,7 +871,10 @@ async def _generate_refreshed_title(
     alone". Same ``_bg`` one-liner path, model, redaction and shape validation
     as the initial titling, and the same optional ``session_key`` charging.
     """
-    ui_language = await asyncio.to_thread(_ui_language)
+    ui_language, title_model = await asyncio.gather(
+        asyncio.to_thread(_ui_language),
+        asyncio.to_thread(_resolve_title_model),
+    )
     prompt = _build_refresh_prompt(messages, current_title, ui_language=ui_language)
     if not prompt:
         return ""
@@ -865,7 +882,7 @@ async def _generate_refreshed_title(
     text = await run_bg_oneliner(
         state.sessions,
         prompt,
-        model=_TITLE_MODEL,
+        model=title_model,
         timeout=_TITLE_TIMEOUT_SECS,
         crew_log_kind="title",
         crew_log_session_key=session_key,
@@ -1525,8 +1542,7 @@ async def maybe_refresh_title(state: DashboardState, slot: _ChatSlot) -> None:
         # before the spend.
         if not await _persist_title(state, slot):
             logger.warning(
-                "Title refresh: consumed milestone not durable for slot %s; "
-                "skipping generation",
+                "Title refresh: consumed milestone not durable for slot %s; " "skipping generation",
                 slot.key,
             )
             return

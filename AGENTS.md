@@ -386,3 +386,14 @@ if a human typed them — the user may not be present. Envelopes:
 `kirocrew gateway --approval yolo` auto-approves ALL tools and refuses to start
 unless `KIROCREW_HOME` is explicitly set to a non-default path. Never point it at
 `~/.kiro/crew`. All harness flags: [cli](docs/system-specs/modules/cli.md).
+
+## Blocked-command escalation
+
+When a tool or command is blocked, do not retry it or route around the block.
+
+1. Report the exact call, the layer that blocked it, and the file or rule that caused it.
+2. Name the smallest safe change.
+3. Leave the change to the operator.
+
+Sources: `security_policy.json`, `denied_commands.json`, `agent.sandbox`, the
+cc-safety-net policy, and the approval card.

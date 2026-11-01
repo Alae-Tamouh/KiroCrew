@@ -70,6 +70,11 @@ _ANY_SESSION_TOKEN_PREFIXES: tuple[str, ...] = (
     "/api/knowledge/agent-document",
     "/api/mcp/servers",
     "/api/autonudge/session-monitor",
+    # Core's durable write surfaces. Their MCP tools run in the same
+    # sandbox as the rest of the session and therefore have no gateway secret;
+    # the per-session token is the only credential they can carry.
+    "/api/lessons",
+    "/api/artifacts",
 )
 
 

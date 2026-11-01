@@ -1160,6 +1160,14 @@ async def test_session_token_grants_internal_for_core_surfaces(
         "/api/guide/agent/start",
         {"X-Session-Key": normal, "X-Session-Token": normal},
     )
+    assert await granted(
+        "/api/lessons",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
+    assert await granted(
+        "/api/artifacts",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
     assert not await granted(
         "/api/session-control/create",
         {"X-Session-Key": normal, "X-Session-Token": normal},

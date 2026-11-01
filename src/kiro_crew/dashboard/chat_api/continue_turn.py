@@ -261,6 +261,38 @@ async def continue_slot_turn(
         # cleanly that it was "interrupted before it finished" sends it looking
         # for half-done work that does not exist.
         interrupted = _is_interrupted(slot)
+
+        def _has_open_tool_call() -> bool:
+            """Whether the current turn left a tool row without a terminal result.
+
+            Walk backwards only to the turn's opening user row: an old,
+            already-accounted-for tool row from an earlier turn must not make
+            every later Continue reset a healthy session. A tool row is terminal
+            once the runner stamps ``meta.done`` (completed, failed, or aborted);
+            an orphan has none.
+            """
+            for message in reversed(slot.messages):
+                role = message.get("role", "")
+                if role == "user" and message.get("content"):
+                    return False
+                if role == "tool":
+                    meta = message.get("meta")
+                    if not isinstance(meta, dict) or meta.get("done") is not True:
+                        return True
+            return False
+
+        if interrupted and _has_open_tool_call():
+            # A Soft Stop/connection loss can leave a native tool call open on
+            # the ACP session: the tool row has no completion, and OpenCode waits
+            # for a result that will never arrive. The old code resumed the same
+            # session and injected Continue, so the next turn sat behind that
+            # orphan until the stall watchdog killed it. Arm the deferred reset
+            # consumed before the next turn allocates (chat_turn/session_reset.py):
+            # the session is recreated from history, clearing the orphaned call
+            # before the continuation is dispatched.
+            pending_key = effective_session_key(slot)
+            if pending_key:
+                slot._pending_reset_history_key = pending_key
         if require_interrupted and not interrupted:
             # session_retry's own refusal: a turn that finished, or that the user
             # ended with Stop, is not a failure to re-run. Continue would carry on

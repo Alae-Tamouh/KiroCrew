@@ -625,3 +625,46 @@ async def test_a_failing_audit_write_does_not_strand_the_queued_continue():
             assert resp.status == 200, await resp.text()
     mock_sel.log_tool_invocation.assert_called_once()
     started.assert_awaited_once()
+
+
+class TestInterruptedToolRecovery:
+    @pytest.mark.asyncio
+    async def test_continue_arms_a_session_reset_when_a_tool_call_is_open(self, _patched):
+        """A soft Stop/connection loss can strand a native tool call.
+
+        Continuing the same ACP session lets the orphan block the next turn
+        forever; the deferred reset is what drops it before the continuation is
+        dispatched.
+        """
+        slot = _ChatSlot("s")
+        slot.append("user", "inspect the repo", "msg msg-u")
+        slot.append(
+            "tool",
+            "grep -rn something .",
+            "msg msg-tool",
+            meta={"tool_call_id": "call-open", "kind": "execute"},
+        )
+        slot.append("error", "⟳ Connection lost — retrying...", "msg msg-err")
+        state = _mock_state(slot)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post("/api/chat/slots/s/continue")
+            assert resp.status == 200
+        assert slot._pending_reset_history_key == "dashboard:s"
+        assert slot._queue[0]["content"].startswith("[Continue — requested by the user]")
+
+    @pytest.mark.asyncio
+    async def test_clean_continue_does_not_reset_a_healthy_session(self, _patched):
+        slot = _ChatSlot("s")
+        slot.append("user", "hi", "msg msg-u")
+        slot.append(
+            "tool",
+            "read a file",
+            "msg msg-tool",
+            meta={"tool_call_id": "call-done", "done": True, "output": "ok"},
+        )
+        slot.append("assistant", "done", "msg msg-a")
+        state = _mock_state(slot)
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post("/api/chat/slots/s/continue")
+            assert resp.status == 200
+        assert slot._pending_reset_history_key is None

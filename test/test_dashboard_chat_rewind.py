@@ -1886,3 +1886,53 @@ class TestRewindChainedHistory:
             assert "archived history" in data["error"]
         # Slot left untouched.
         assert slot.messages[-1]["content"] == "live-q"
+
+
+class TestBackendAwareReadinessGate:
+    @pytest.mark.asyncio
+    async def test_opencode_rewind_does_not_require_kiro_cli(self, tmp_path, monkeypatch):
+        """Edit-and-resend must work on a self-served harness.
+
+        The route used to apply the Kiro-CLI readiness gate to every backend, so
+        a host without kiro-cli refused a valid OpenCode rewind with 503 before
+        touching history.
+        """
+        state = _make_state(tmp_path)
+        _populate_slot(state)
+        state.sessions._session_map.get = MagicMock(return_value="")
+        state.kiro_prerequisite_service = SimpleNamespace(
+            verified_ready=AsyncMock(return_value=False)
+        )
+        cfg = SimpleNamespace(
+            agent=SimpleNamespace(acp_backend="opencode", member_acp_backend="opencode")
+        )
+        monkeypatch.setattr(
+            "kiro_crew.config.loader.KiroCrewConfig.load", staticmethod(lambda: cfg)
+        )
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post(
+                "/api/chat/slots/src/rewind",
+                json={"at_message_index": 0, "content": "edited on opencode"},
+            )
+            assert resp.status == 200, await resp.text()
+        assert state._slots["src"].messages[0]["content"] == "edited on opencode"
+
+    @pytest.mark.asyncio
+    async def test_kiro_rewind_keeps_the_readiness_gate(self, tmp_path, monkeypatch):
+        state = _make_state(tmp_path)
+        _populate_slot(state)
+        state.kiro_prerequisite_service = SimpleNamespace(
+            verified_ready=AsyncMock(return_value=False)
+        )
+        cfg = SimpleNamespace(agent=SimpleNamespace(acp_backend="kiro", member_acp_backend="kiro"))
+        monkeypatch.setattr(
+            "kiro_crew.config.loader.KiroCrewConfig.load", staticmethod(lambda: cfg)
+        )
+        async with TestClient(TestServer(_make_app(state))) as client:
+            resp = await client.post(
+                "/api/chat/slots/src/rewind",
+                json={"at_message_index": 0, "content": "edited on kiro"},
+            )
+            assert resp.status == 503
+            body = await resp.json()
+            assert body["code"] == "kiro_prerequisite_required"

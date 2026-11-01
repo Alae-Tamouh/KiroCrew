@@ -24,7 +24,7 @@ from kiro_crew.dashboard.chat_utils import (
     slot_history_key,
     variant_from_row,
 )
-from kiro_crew.dashboard.kiro_readiness import reject_if_kiro_unverified
+from kiro_crew.dashboard.kiro_readiness import reject_if_kiro_unverified_for_slot
 from kiro_crew.dashboard.relay_archive import relay_archive_refusal
 from kiro_crew.dashboard.slot_ownership import (
     checkpoint_slot_replaced,
@@ -115,19 +115,21 @@ async def api_chat_slot_regenerate(request: web.Request) -> web.Response:
     The previous reply is replaced only when the new turn produced one; see
     ``chat_turn.regenerate_swap``.
     """
-    # The readiness latch is honored before the turn is dispatched, as for the
-    # other history actions.
-    blocked = await reject_if_kiro_unverified(request)
-    if blocked is not None:
-        return blocked
     state: DashboardState = request.app["state"]
     name = request.match_info["slot"]
     slot = state._slots.get(name)
     # The app claim, recorded on the audit row below. Ownership itself is decided
     # before this handler runs, by the per-slot checkpoint (slot_ownership.py),
-    # on the slot that was live then. The readiness await above can outlast a
+    # on the slot that was live then. The readiness await below can outlast a
     # close and a same-name create, so the slot looked up now must be that one.
     request_app = request.get("app", "")
+    # The readiness latch is honored before the turn is dispatched, as for the
+    # other history actions, but only for a Kiro-backed slot: a self-served
+    # harness such as OpenCode does not use kiro-cli.
+    if slot is not None:
+        blocked = await reject_if_kiro_unverified_for_slot(request, slot)
+        if blocked is not None:
+            return blocked
     if not slot or checkpoint_slot_replaced(request, slot):
         return slot_not_found()
     under_construction = reject_if_slot_under_construction(state, slot)
@@ -406,18 +408,19 @@ async def api_chat_slot_edit_resend(request: web.Request) -> web.Response:
         _subagents_attached_response,
     )
 
-    # Destructive: this truncates and PERSISTS history before the background
-    # turn runs, so a failed turn cannot undo it. Unlike an ordinary send, the
-    # readiness latch must be honored BEFORE the mutation.
-    blocked = await reject_if_kiro_unverified(request)
-    if blocked is not None:
-        return blocked
     state: DashboardState = request.app["state"]
     name = request.match_info["slot"]
     slot = state._slots.get(name)
     request_app = request.get("app", "")
     if not slot:
         return slot_not_found()
+    # Destructive: this truncates and PERSISTS history before the background
+    # turn runs, so a failed turn cannot undo it. The readiness latch is
+    # honored before the mutation, but only for a Kiro-backed slot: OpenCode and
+    # the other self-served harnesses do not use kiro-cli.
+    blocked = await reject_if_kiro_unverified_for_slot(request, slot)
+    if blocked is not None:
+        return blocked
     under_construction = reject_if_slot_under_construction(state, slot)
     if under_construction is not None:
         return under_construction

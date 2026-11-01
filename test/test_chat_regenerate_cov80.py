@@ -154,7 +154,7 @@ async def test_readiness_latch_blocks_before_the_dispatch(state) -> None:
     blocked = web.json_response({"error": "kiro not verified"}, status=503)
 
     with patch(
-        "kiro_crew.dashboard.chat_regenerate.reject_if_kiro_unverified",
+        "kiro_crew.dashboard.chat_regenerate.reject_if_kiro_unverified_for_slot",
         new=AsyncMock(return_value=blocked),
     ):
         async with _client(state) as client:
@@ -762,7 +762,7 @@ async def test_edit_resend_readiness_latch_blocks_before_the_truncation(state) -
     blocked = web.json_response({"error": "kiro not verified"}, status=503)
 
     with patch(
-        "kiro_crew.dashboard.chat_regenerate.reject_if_kiro_unverified",
+        "kiro_crew.dashboard.chat_regenerate.reject_if_kiro_unverified_for_slot",
         new=AsyncMock(return_value=blocked),
     ):
         async with _client(state) as client:

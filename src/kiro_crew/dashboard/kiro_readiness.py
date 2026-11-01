@@ -21,6 +21,7 @@ latched value can be arbitrarily stale. That splits the callers in two:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -246,6 +247,36 @@ def _service(request: web.Request) -> object:
     if service is None:
         service = getattr(request.app.get("state"), "kiro_prerequisite_service", None)
     return service
+
+
+async def reject_if_kiro_unverified_for_slot(
+    request: web.Request, slot: object
+) -> web.Response | None:
+    """Apply the Kiro-CLI readiness gate only to a Kiro-backed slot.
+
+    Rewind and regenerate used to call :func:`reject_if_kiro_unverified`
+    unconditionally. That is correct for a kiro-cli session, but an OpenCode (or
+    other self-served) session needs no Kiro CLI at all, so a missing install
+    refused a perfectly valid edit-and-resend before it touched history. The
+    backend is read from the same config the session allocator uses; a member
+    slot follows ``member_acp_backend``.
+
+    A config read failure keeps the gate (fail closed), and a blank backend
+    stays gated because it may be the install's default kiro-cli.
+    """
+    try:
+        from kiro_crew.config.loader import KiroCrewConfig
+
+        cfg = await asyncio.to_thread(KiroCrewConfig.load)
+        agent_cfg = cfg.agent
+        is_member = str(getattr(slot, "mode", "") or "") == "member"
+        backend = getattr(agent_cfg, "member_acp_backend" if is_member else "acp_backend", "")
+    except Exception:
+        logger.debug("kiro readiness: backend resolution failed; keeping the gate", exc_info=True)
+        return await reject_if_kiro_unverified(request)
+    if isinstance(backend, str) and backend and backend != "kiro":
+        return None
+    return await reject_if_kiro_unverified(request)
 
 
 async def reject_if_kiro_unverified(

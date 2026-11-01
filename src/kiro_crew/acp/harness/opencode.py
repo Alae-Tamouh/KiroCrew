@@ -515,11 +515,29 @@ def _opencode_seeded_deny_rules(config_content: str, setting_key: str) -> tuple[
     )
 
 
-def _opencode_routing_config(backend: str, deny_rules: Collection[str] = ()) -> str:
+def _opencode_seeded_native_excludes(config_content: str) -> tuple[str, ...]:
+    """The native ``tools`` keys Crew set to ``False`` in *config_content*."""
+    try:
+        seed = json.loads(config_content)
+    except ValueError:
+        return ()
+    tools = seed.get("tools") if isinstance(seed, dict) else None
+    if not isinstance(tools, dict):
+        return ()
+    return tuple(str(name) for name, value in tools.items() if value is False)
+
+
+def _opencode_routing_config(
+    backend: str,
+    deny_rules: Collection[str] = (),
+    native_disabled_tools: Collection[str] = (),
+) -> str:
     """The inline harness config that makes this session ask, as one env value.
 
     *deny_rules* are the tool ids the session's projection asks the harness itself to
-    deny (``SessionProjection.harness_deny_rules``).
+    deny (``SessionProjection.harness_deny_rules``). *native_disabled_tools* are
+    built-in tool keys a worker's ``excludedTools`` switches off; they ride the
+    harness's own ``tools`` map, which is separate from the permission routing.
 
     MERGED over an ambient value rather than replacing it: an operator who set
     the variable themselves keeps every key they chose, and only the permission
@@ -559,6 +577,16 @@ def _opencode_routing_config(backend: str, deny_rules: Collection[str] = ()) -> 
         merged[setting_key] = {"*": value, **{rule: {"*": "deny"} for rule in rules}}
     else:
         merged[setting_key] = value
+    native = tuple(dict.fromkeys(native_disabled_tools))
+    if native:
+        tools = merged.get("tools")
+        if not isinstance(tools, dict):
+            tools = {}
+        else:
+            tools = dict(tools)
+        for name in native:
+            tools[name] = False
+        merged["tools"] = tools
     return json.dumps(merged)
 
 
@@ -734,6 +762,21 @@ def _verify_opencode_routing(
                 f"agent {session._scrub_observed(agent_name)!r} overrides it: {issue}",
                 _opencode_routing_remedy(backend, raw),
             )
+    expected_native = _opencode_seeded_native_excludes(config_content)
+    if expected_native:
+        native_tools = resolved.get("tools")
+        if not isinstance(native_tools, dict):
+            return (
+                "the resolved configuration does not carry the worker's native tool " "exclusions",
+                _opencode_readback_remedy(),
+            )
+        missing = [name for name in expected_native if native_tools.get(name) is not False]
+        if missing:
+            return (
+                "the resolved configuration does not switch off the worker's native "
+                f"tool(s) {', '.join(sorted(missing))}",
+                _opencode_readback_remedy(),
+            )
     return "", ""
 
 
@@ -874,7 +917,9 @@ class OpencodeLaunch(ProcessAdapter):
         # synchronous spawn on the gateway loop is the stall this path guards
         # against everywhere else.
         self._config_content = _opencode_routing_config(
-            self.backend, getattr(session, "_session_harness_deny_rules", ())
+            self.backend,
+            getattr(session, "_session_harness_deny_rules", ()),
+            getattr(session, "_session_native_disabled_tools", ()),
         )
         # Wrapped in the SAME sandbox, with the SAME credential mask, as the session
         # spawn. The read-back runs the harness's own binary, and this harness

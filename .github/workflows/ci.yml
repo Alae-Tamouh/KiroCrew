@@ -67,7 +67,7 @@ jobs:
     # With the variable unset a push to main runs this job and the full matrix
     # behind it. Every heavy job `needs` this one, so skipping it skips them all.
     if: github.event_name != 'push' || vars.MERGE_QUEUE_ENABLED != 'true'
-    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || github.repository == 'kirodotdev/KiroCrew' && 'kirocrew-linux-4-core' || 'ubuntu-latest' }}
     # 15, not 5: the job's own work is seconds, but its `fetch-depth: 0`
     # checkout (paths-filter and the leaf resolver diff against the merge base
     # with local git) is a full-history fetch of a large repository, and on a
@@ -559,7 +559,7 @@ jobs:
     # push path needs the barrier. With the variable unset, Fast Gate runs on
     # the push too (fast-gate.yml has a push trigger) and this job consumes it.
     if: github.event_name != 'push' || vars.MERGE_QUEUE_ENABLED != 'true'
-    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || github.repository == 'kirodotdev/KiroCrew' && 'kirocrew-linux-4-core' || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       # actions:read is what lets this read another workflow's runs. Job-level
@@ -635,7 +635,7 @@ jobs:
     # runs on which await-fast-gate runs. `push` is listed for main alone, and
     # the ref is restated so a later trigger on another branch cannot reach it.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MERGE_QUEUE_ENABLED != 'true'
-    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && contains(fromJSON(vars.CODEBUILD_ACTOR_IDS || '[]'), github.actor_id) && (github.event_name == 'push' || github.event_name == 'merge_group' || (github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize') && github.event.pull_request.head.repo.full_name == github.repository)) && format('codebuild-kirocrew-gha-linux-{0}-{1}', github.run_id, github.run_attempt) || github.repository == 'kirodotdev/KiroCrew' && 'kirocrew-linux-4-core' || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       # actions:write is what lets this cancel its own run (it also covers the
@@ -2046,8 +2046,9 @@ jobs:
           done
 
   # The job where Linux mount-namespace tests EXECUTE rather than skip. They need
-  # unprivileged user namespaces (unshare NEWNS), which ubuntu-24.04 restricts via
-  # AppArmor -- the same restriction codex-review.yml clears for its bwrap sandbox.
+  # unprivileged user namespaces (unshare NEWNS), which the hosted Ubuntu image
+  # restricts via AppArmor -- the same restriction codex-review.yml clears for its
+  # bwrap sandbox.
   # Without this job the ~/.kiro/crew sensitive-path keystone has no CI coverage at all,
   # even though branch protection treats breaking it as a blocking offence.
   #
@@ -2073,7 +2074,17 @@ jobs:
     name: Backend Tests (namespace sandbox)
     needs: [changes, await-fast-gate, lint-gate]
     if: ${{ !cancelled() && needs.lint-gate.result == 'success' && needs.changes.outputs.only_frontend != 'true' }}
-    runs-on: ubuntu-24.04
+    # An ordinary hosted VM is the requirement stated above, and the
+    # `kirocrew-runners` group is that same VM with no job container, on a cap
+    # this organization owns rather than the enterprise-shared standard pool. A
+    # fork cannot reach an organization group, so it stays hosted-standard.
+    #
+    # The group serves one Linux image and follows `latest`, so this lane no
+    # longer names a version. The two verification steps below are what make
+    # that safe: they fail the job by name if an image ever stops granting the
+    # namespaces, instead of letting every guarded test skip and the gate go
+    # green having asserted nothing.
+    runs-on: ${{ github.repository == 'kirodotdev/KiroCrew' && 'kirocrew-linux-4-core' || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       KIROCREW_TMP_RESIDUE_STRICT: "1"

@@ -1216,6 +1216,14 @@
       "hint": "Render programming ligatures (=>, !=, ->) when the custom font has them. Code and diffs in messages are unaffected."
     },
     {
+      "id": "display.explore",
+      "label": "Explore",
+      "tab": "display",
+      "route": "/settings/display/view?highlight=key%3Adashboard.milestones_enabled",
+      "hint": "Show Explore in the top bar and a Try today card on a new chat.",
+      "configKey": "dashboard.milestones_enabled"
+    },
+    {
       "id": "display.external-terminal-app",
       "label": "External terminal app",
       "tab": "display",
@@ -1286,11 +1294,23 @@
       "hint": "Light or dark appearance for the dashboard"
     },
     {
+      "id": "display.overlays",
+      "label": "Overlays",
+      "tab": "display",
+      "route": "/settings/display/theme?highlight=display.overlays"
+    },
+    {
       "id": "display.palette",
       "label": "Palette",
       "tab": "display",
       "route": "/settings/display/sidebar?highlight=display.palette",
       "hint": "Choose a color palette for your sidebar sessions."
+    },
+    {
+      "id": "display.persona",
+      "label": "Persona",
+      "tab": "display",
+      "route": "/settings/display/theme?highlight=display.persona"
     },
     {
       "id": "display.reuse-the-current-terminal",
@@ -1306,6 +1326,12 @@
       "tab": "display",
       "route": "/settings/display/sidebar?highlight=key%3Adashboard.show_unread_dot",
       "configKey": "dashboard.show_unread_dot"
+    },
+    {
+      "id": "display.sounds",
+      "label": "Sounds",
+      "tab": "display",
+      "route": "/settings/display/theme?highlight=display.sounds"
     },
     {
       "id": "display.theme",

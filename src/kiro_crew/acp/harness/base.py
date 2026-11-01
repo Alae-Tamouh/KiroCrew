@@ -146,6 +146,8 @@ class ProcessSession(Protocol):
     _deepseek_gate_nonce: str
     _deepseek_read_only_issue: str
     _copilot_mcp_config_path: str
+    _launch_mcp_servers: list[Any] | None
+    _mcp_relaunch_pending: bool
 
     def _agent_env_for_spawn(self) -> dict[str, str]:
         """``agent.env`` for the spawn in progress, read at most once per spawn: a

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncContextManager
 
 from kiro_crew import _facade_mirror, model_scope  # noqa: F401
+from kiro_crew.acp import relaunch_reload as _relaunch_reload
 from kiro_crew.acp.client import (  # noqa: F401
     DEFAULT_MODEL,
     AcpAuthRequired,
@@ -51,6 +52,7 @@ from kiro_crew.acp.types import (  # noqa: F401
     ACP_BACKEND_KIRO,
     ACP_BACKEND_OPENCODE,
     ACP_BACKEND_PI,
+    ACP_BACKEND_STRANDS,
     ACP_BACKENDS_ACP_RUNTIME,
     ACP_BACKENDS_COMPACT,
     ACP_BACKENDS_CONTEXT_RECYCLE,
@@ -596,6 +598,11 @@ class AcpProvider(LLMProvider):
         return self._client.backend == ACP_BACKEND_COPILOT
 
     @property
+    def is_strands_backend(self) -> bool:
+        """True when this ACP provider talks to the Strands CLI (vs kiro-cli)."""
+        return self._client.backend == ACP_BACKEND_STRANDS
+
+    @property
     def is_kas_backend(self) -> bool:
         """True when this ACP provider talks to KAS (kiro-agent)."""
         return self._client.backend == ACP_BACKEND_KAS
@@ -793,9 +800,24 @@ class AcpProvider(LLMProvider):
         """
         return getattr(self._client, "mcp_config_wire_reinject", False) is True
 
+    @property
+    def mcp_config_relaunch_reload(self) -> bool:
+        """True when an MCP write reaches this session by relaunch + ``session/load``.
+
+        Answered for the direct ``AcpClient`` from ``ACP_BACKENDS_MCP_RELAUNCH_RELOAD``
+        membership (harness-parity H6/H14); a runtime-backed provider's inner
+        session provider is not an ``AcpClient`` and answers False.
+        """
+        client = self._client
+        return isinstance(client, AcpClient) and _relaunch_reload.mcp_config_relaunch_reload(client)
+
     def mark_mcp_config_changed(self) -> None:
-        """Hand the mark to the inner session provider; nothing to mark before startup."""
-        mark = getattr(self._client, "mark_mcp_config_changed", None)
+        """Hand the mark to the inner session provider, or set it on the direct client."""
+        client = self._client
+        if isinstance(client, AcpClient):
+            _relaunch_reload.mark_mcp_config_changed(client)
+            return
+        mark = getattr(client, "mark_mcp_config_changed", None)
         if callable(mark):
             mark()
 

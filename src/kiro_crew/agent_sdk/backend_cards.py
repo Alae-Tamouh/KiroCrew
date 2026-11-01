@@ -367,6 +367,10 @@ OPERATOR_LINES: Tuple[_LineSpec, ...] = (
 #: DEFECT rather than an absent feature, and a card that listed defect classes in
 #: front of someone choosing a harness would be worse than one line shorter.
 OFF_CARD_SETS: Mapping[str, str] = {
+    "ACP_BACKENDS_MODEL_AT_LAUNCH": (
+        "which channel carries a model pick: a launch argument instead of a wire "
+        "request. The model-switch line already says whether a running session can move."
+    ),
     "ACP_BACKENDS_TEMPLATE_ADDITIONS_AT_SPAWN": (
         "whether a server the user approved for a template Crew does not own reaches "
         "that template's sessions here. The approval card asks the same question for "
@@ -580,6 +584,12 @@ OFF_CARD_SETS: Mapping[str, str] = {
         "whether an edited message's rewind forks the native session or replays "
         "the transcript as text. The edit runs either way"
     ),
+    "ACP_BACKENDS_RELOAD_DISPOSED_SESSION": (
+        "whether Crew reads one harness's own error for a session it disposed in a "
+        "live process, and reloads that session in a fresh one before the next "
+        "prompt. Recovery from a harness's failure mode, not a feature: a harness "
+        "without that failure mode loses nothing by being outside the set"
+    ),
     "ACP_BACKENDS_SELF_SERVED_ACP": (
         "whether a harness's whole launch is a row of ACP_BACKEND_LAUNCH, so the "
         "spawn path, the install probe and the driver seams resolve argv from that "
@@ -673,6 +683,13 @@ OFF_CARD_SETS: Mapping[str, str] = {
         "but a card that stated this half for KAS beside an off-card hot-reload set "
         "would read as kiro-cli lacking what it has; one fact needs one line, and "
         "that line cannot be projected while the other half cannot"
+    ),
+    "ACP_BACKENDS_MCP_RELAUNCH_RELOAD": (
+        "a third half of the same fact -- whether a freshly installed MCP server "
+        "reaches a RUNNING session, here by Crew relaunching the process with the "
+        "new launch file and loading the same session. Off the card for the reason "
+        "the re-sent projection is: the fact needs one line, and that line cannot be "
+        "projected while the version-gated hot-reload half cannot"
     ),
 }
 

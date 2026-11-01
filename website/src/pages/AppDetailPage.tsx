@@ -33,7 +33,7 @@ import ErrorNotice from '../components/ErrorNotice'
 import { useConfirm } from '../components/ConfirmDialog'
 import { findReport, recordError } from '../utils/errorReport'
 import { copyCode } from '../utils/clipboard'
-import { focusOnMount } from '../utils/focusOnMount'
+import AppStoreDialog from '../components/appstore/AppStoreDialog'
 import { safeHttpUrl } from '../lib/safeUrl'
 
 import { i18nT } from '../i18n/t'
@@ -86,7 +86,11 @@ export default function AppDetailPage() {
   const stagedEvents = app?.approvedGrants
     ? (app.manifest?.permissions?.events || []).filter(e => !(app.approvedGrants?.events || []).includes(e))
     : []
-  const hasStagedGrants = stagedApi.length + stagedEvents.length > 0
+  // Link-preview hosts and text patterns an update widened wait the same way.
+  const stagedLinkHosts = app?.linkPreviewGrant?.stagedHosts || []
+  const stagedLinkPatterns = app?.linkPreviewGrant?.stagedTextPatterns || []
+  const stagedFullUrl = app?.linkPreviewGrant?.stagedFullUrl === true
+  const hasStagedGrants = stagedApi.length + stagedEvents.length + stagedLinkHosts.length + stagedLinkPatterns.length > 0 || stagedFullUrl
   // Shown where the notice was once the owner approves, so the moment is confirmed.
   const [grantsApprovedMsg, setGrantsApprovedMsg] = useState('')
   const enableLabel = app?.sessionApprovalConsentPending
@@ -258,6 +262,7 @@ export default function AppDetailPage() {
             enabled: installed.enabled,
             sessionApprovalConsentPending: installed.sessionApprovalConsentPending,
             approvedGrants: installed.approvedGrants,
+            linkPreviewGrant: installed.linkPreviewGrant,
             managed: installed.managed,
             source: installed.source,
             installedAt: installed.installedAt,
@@ -383,6 +388,7 @@ export default function AppDetailPage() {
             enabled: installed.enabled,
             sessionApprovalConsentPending: installed.sessionApprovalConsentPending,
             approvedGrants: installed.approvedGrants,
+            linkPreviewGrant: installed.linkPreviewGrant,
             managed: installed.managed,
             source: installed.source,
             installedAt: installed.installedAt,
@@ -951,6 +957,29 @@ export default function AppDetailPage() {
                   </div>
                 </div>
               )}
+              {stagedLinkHosts.length > 0 && (
+                <div>
+                  <div className="text-[13px]">{i18nT('pages.appDetailPage.grants_reconsent_link_hosts')}</div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {stagedLinkHosts.map(h => (
+                      <code key={h} className="bg-bg-elevated border border-border px-1.5 py-0.5 rounded text-[11px] text-text">{h}</code>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stagedLinkPatterns.length > 0 && (
+                <div>
+                  <div className="text-[13px]">{i18nT('pages.appDetailPage.grants_reconsent_link_patterns')}</div>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {stagedLinkPatterns.map(p => (
+                      <code key={p} className="bg-bg-elevated border border-border px-1.5 py-0.5 rounded text-[11px] text-text break-all">{p}</code>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {stagedFullUrl && (
+                <div className="text-[13px]">{i18nT('pages.appDetailPage.grants_reconsent_link_full_url')}</div>
+              )}
               {app.enabled && (
                 <span className="text-[13px] text-muted">{i18nT('pages.appDetailPage.grants_reconsent_undo', { name: appDisplayName(app) })}</span>
               )}
@@ -963,9 +992,15 @@ export default function AppDetailPage() {
               primary
               onClick={async () => {
                 setActionLoading('approve_grants')
-                const approved = [...stagedApi, ...stagedEvents].join(', ')
+                const approved = [...stagedApi, ...stagedEvents, ...stagedLinkHosts, ...stagedLinkPatterns, ...(stagedFullUrl ? ['fullUrl'] : [])].join(', ')
                 try {
-                  await api.enableApp(app.name, false, { api: stagedApi, events: stagedEvents })
+                  await api.enableApp(app.name, false, {
+                    api: stagedApi,
+                    events: stagedEvents,
+                    linkPreviewHosts: stagedLinkHosts,
+                    linkPreviewTextPatterns: stagedLinkPatterns,
+                    linkPreviewFullUrl: stagedFullUrl ? ['fullUrl'] : [],
+                  })
                   setGrantsApprovedMsg(i18nT('pages.appDetailPage.grants_approved', { entries: approved }))
                   await load()
                   window.dispatchEvent(new Event('mc:apps-changed'))
@@ -1047,15 +1082,14 @@ export default function AppDetailPage() {
         />
         {consentDialog}
 
-        {/* Uninstall confirmation modal */}
+        {/* Uninstall confirmation modal. Click-to-dismiss on the backdrop is a
+            mouse affordance; keyboard users close with Escape, and Tab stays
+            inside the dialog (AppStoreDialog). */}
         {showUninstallConfirm && app && (
-          // Modal backdrop: click-to-dismiss is a mouse affordance; keyboard
-          // users dismiss via the Escape handler in onKeyDown below.
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-bg/60 backdrop-blur-xs animate-rise"
-            onClick={() => setShowUninstallConfirm(false)}
-            onKeyDown={e => { if (e.key === 'Escape') setShowUninstallConfirm(false) }}
-            tabIndex={-1} ref={focusOnMount} role="dialog" aria-modal="true" aria-label={i18nT('pages.appDetailPage.confirm_uninstall')}
+          <AppStoreDialog
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-bg/60 backdrop-blur-xs animate-rise"
+            onClose={() => setShowUninstallConfirm(false)}
+            aria-label={i18nT('pages.appDetailPage.confirm_uninstall')}
           >
             {/* Presentational wrapper: stops backdrop-dismiss on inner clicks. */}
             {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
@@ -1084,7 +1118,7 @@ export default function AppDetailPage() {
                 </Btn>
               </div>
             </div>
-          </div>
+          </AppStoreDialog>
         )}
 
         {/* Hero banner (only when the app ships one, or its local fallback survives a load failure) */}

@@ -1720,7 +1720,22 @@ def install_crew_log_publisher(state: Any) -> CrewLogPublisher | None:
     return _publisher
 
 
-guard_owner_surface_routes(globals(), member_scoped=frozenset())
+#: The unit-keyed door authenticates and scopes its own caller in
+#: ``_authorize_crew_log_read`` (internal secret + strict session identity), so it
+#: must not be refused by the browser-owner guard first. A private member reaches
+#: only its own unit or one it dispatched; a browser caller with no secret is still
+#: refused by the handler before any read. The session-keyed browser routes above
+#: stay owner-only.
+_CREW_LOG_MEMBER_SCOPED_ROUTES = frozenset(
+    {
+        "api_crew_log_sessions",
+        "api_crew_log_resolve",
+        "api_crew_log_unit_page",
+        "api_crew_log_unit_projection",
+    }
+)
+
+guard_owner_surface_routes(globals(), member_scoped=_CREW_LOG_MEMBER_SCOPED_ROUTES)
 
 
 #: Owner modules, lowest layer first: the first holder of a name answers its reads.

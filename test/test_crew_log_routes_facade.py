@@ -115,16 +115,33 @@ def test_the_owners_log_under_the_facade_name() -> None:
     assert all(found is crew_log.logger for found in loggers.values())
 
 
-def test_every_route_is_the_facade_own_guarded_object() -> None:
-    """``guard_owner_surface_routes`` wraps the routes in the facade's own namespace, so every
-    route stays defined there: an ``api_*`` coroutine served from an owner would be the
-    unguarded original."""
+def test_every_route_is_the_facade_own_guarded_or_scoped_object() -> None:
+    """The browser pair stays behind the owner guard; the unit-keyed agent door skips it
+    and authenticates inside ``_authorize_crew_log_read``. A route served from an owner
+    would be the unguarded original."""
     routes = [name for name in vars(crew_log) if name.startswith("api_")]
     assert len(routes) == 7
     assert not any(name.startswith("api_") for name in _index().exports)
-    for name in routes:
+    browser_routes = {
+        "api_session_crew_log",
+        "api_session_crew_log_projection",
+        "api_session_crew_log_projections",
+    }
+    scoped_routes = {
+        "api_crew_log_sessions",
+        "api_crew_log_resolve",
+        "api_crew_log_unit_page",
+        "api_crew_log_unit_projection",
+    }
+    assert set(routes) == browser_routes | scoped_routes
+    for name in browser_routes:
         route = vars(crew_log)[name]
         assert inspect.iscoroutinefunction(route.__wrapped__), name
+        assert route.__module__ == FACADE, name
+    for name in scoped_routes:
+        route = vars(crew_log)[name]
+        assert not hasattr(route, "__wrapped__"), name
+        assert inspect.iscoroutinefunction(route), name
         assert route.__module__ == FACADE, name
 
 

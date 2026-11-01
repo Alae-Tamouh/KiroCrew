@@ -305,6 +305,7 @@ class AcpClient:
         # Tool ids the projection asks the harness itself to deny
         # (``SessionProjection.harness_deny_rules``), seeded by the opencode routing.
         self._session_harness_deny_rules: tuple[str, ...] = ()
+        self._session_native_disabled_tools: tuple[str, ...] = ()
         # The subset of those rules the opencode read-back found IN FORCE, handed back
         # to every later projection so it withholds a server whose rule is not. None
         # until this spawn has seeded any.

@@ -69,6 +69,7 @@ from typing import Any, Mapping
 from kiro_crew.acp.session_mcp import (
     CONTROL_PLANE_SERVERS,
     SessionMcpProjection,
+    acp_server_element,
     session_mcp_projection,
 )
 from kiro_crew.acp_backends import ACP_BACKEND_OPENCODE
@@ -94,6 +95,29 @@ _D = Disposition
 #: no information -- and the one this projection removes. Named rather than spelled
 #: inline so the pop and the prose cannot drift onto different strings.
 _STDIO_TAG = "stdio"
+
+#: Crew's dashboard-facing managed servers this projection mounts WITH identity.
+#: Every other identity-bound server stays withheld: member control and the panel
+#: are appended by the member mounts (never by the spec), and the opt-in managed
+#: servers are not enabled for opencode yet. Both names here are re-derived from
+#: ``managed_mcp_spec_entry`` before they receive the key, so a spec spelling
+#: cannot choose their launch.
+_OPENCODE_IDENTITY_SERVERS = frozenset(
+    {
+        "kirocrew-guide",
+        "kirocrew-mate",
+        # Opt-in crew surfaces that are safe to mount on OpenCode: work-ledger
+        # reads/writes and crew-log reads. They carry the same per-session
+        # identity and their MCP-only routes are in the token fallback.
+        "kirocrew-work",
+        "kirocrew-crew-log",
+    }
+)
+
+#: Every element this projection may hand the session key: the re-derived
+#: dashboard-facing servers above plus the two control-plane entries
+#: ``session_mcp_servers`` already re-derives.
+_OPENCODE_IDENTITY_NAMES = frozenset(CONTROL_PLANE_SERVERS) | _OPENCODE_IDENTITY_SERVERS
 
 
 def without_stdio_tag(element: dict[str, Any]) -> dict[str, Any]:
@@ -125,19 +149,20 @@ def opencode_elements(
     session_key: str = "",
     channel_id: str = "",
     session_token: str = "",
+    identity_names: Collection[str] = CONTROL_PLANE_SERVERS,
 ) -> list[dict[str, Any]]:
     """Apply opencode's identity rule to an already-translated array.
 
-    **The identity env goes on Crew's OWN CONTROL PLANE and nowhere else.**
+    **The identity env goes on Crew's OWN MANAGED SERVERS, and nowhere else.**
     ``KIROCREW_SESSION_KEY`` is the credential Crew's internal API authenticates a
     session-directive claim with, so it may ride only an element Crew itself
-    derived. ``kirocrew-core`` and ``kirocrew-cron`` are exactly that: the shared
-    translation REPLACES them from ``managed_mcp_spec_entry``, so their command,
-    args and env are Crew's own by construction and no part of the hand-editable
-    spec reaches the child. Everything else in the array gets NO Crew identity,
-    because an element the spec describes is one whose command, args and env the
-    spec chose -- handing it this session's credential would let a hand-edited line
-    drive the session it was mounted into.
+    derived. ``identity_names`` is that population: names the caller re-derived
+    from ``managed_mcp_spec_entry``, so their command, args and env are Crew's own
+    by construction and no part of the hand-editable spec reaches the child.
+    Everything else in the array gets NO Crew identity, because an element the spec
+    describes is one whose command, args and env the spec chose -- handing it this
+    session's credential would let a hand-edited line drive the session it was
+    mounted into.
 
     The carriage is needed for a DIFFERENT reason than codex's, and the difference
     is worth keeping straight because it decides what happens if the rule is
@@ -187,7 +212,7 @@ def opencode_elements(
         # harness discards it, and depending on that discarding is what the
         # docstring above declines to do.
         element = without_stdio_tag(dict(element))
-        if identity and str(element.get("name") or "") in CONTROL_PLANE_SERVERS:
+        if identity and str(element.get("name") or "") in identity_names:
             element = with_env(element, identity)
         out.append(element)
     return out
@@ -237,15 +262,92 @@ def opencode_deny_rules(disabled_tools: Collection[tuple[str, str]]) -> tuple[st
     return tuple(sorted(ids - _REMAPPED_TOOL_IDS))
 
 
+#: Kiro native tool names/aliases mapped to the OpenCode ``tools`` keys that
+#: disable them. A name outside this table is not silently dropped: the worker
+#: is refused, because running without a limit it saved is the wrong direction.
+_NATIVE_TOOL_ALIASES: dict[str, tuple[str, ...]] = {
+    "shell": ("bash",),
+    "execute_bash": ("bash",),
+    "bash": ("bash",),
+    "fs_write": ("edit", "write"),
+    "write": ("write",),
+    "edit": ("edit",),
+    "apply_patch": ("edit",),
+    "patch": ("edit",),
+    "fs_read": ("read",),
+    "read": ("read",),
+    "grep": ("grep",),
+    "glob": ("glob",),
+    "web_fetch": ("webfetch",),
+    "webfetch": ("webfetch",),
+    "web_search": ("websearch",),
+    "websearch": ("websearch",),
+    "todo": ("todowrite",),
+    "todowrite": ("todowrite",),
+    "task": ("task",),
+    "subagent": ("task",),
+    "question": ("question",),
+    "skill": ("skill",),
+}
+
+
+def opencode_excluded_tools(
+    spec: dict[str, Any] | None,
+) -> tuple[tuple[str, ...], frozenset[tuple[str, str]], frozenset[str], tuple[str, ...]]:
+    """Translate a spec's ``excludedTools`` into OpenCode's three channels.
+
+    Returns ``(native_keys, mcp_pairs, excluded_servers, unknown)``:
+
+    * ``native_keys`` are OpenCode ``tools`` keys to set ``false``;
+    * ``mcp_pairs`` are ``(server, tool)`` pairs for the permission deny seed;
+    * ``excluded_servers`` are whole servers to withhold from the array;
+    * ``unknown`` entries cannot be represented and must refuse the session.
+
+    The worker/crewmate spec is user-editable. A name that reaches no channel is
+    returned rather than ignored so the caller can fail closed.
+    """
+    raw = spec.get("excludedTools") if isinstance(spec, dict) else None
+    if not isinstance(raw, list):
+        return (), frozenset(), frozenset(), ()
+    native: list[str] = []
+    pairs: set[tuple[str, str]] = set()
+    servers: set[str] = set()
+    unknown: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str):
+            continue
+        name = entry.strip()
+        if not name:
+            continue
+        if name.startswith("@"):
+            server, _, tool = name[1:].partition("/")
+            if not server:
+                unknown.append(name)
+            elif tool:
+                pairs.add((server, tool))
+            else:
+                servers.add(server)
+            continue
+        mapped = _NATIVE_TOOL_ALIASES.get(name)
+        if mapped is None:
+            unknown.append(name)
+        else:
+            native.extend(mapped)
+    return tuple(dict.fromkeys(native)), frozenset(pairs), frozenset(servers), tuple(unknown)
+
+
 def place_single_binary_array(
     projection: SessionMcpProjection,
     *,
     label: str,
     unhonoured: frozenset[str],
+    excluded_servers: Collection[str] = (),
     stub_elements: Collection[Mapping[str, Any]] = (),
     session_key: str = "",
     channel_id: str = "",
     session_token: str = "",
+    identity_mounted: Collection[str] = (),
+    identity_names: Collection[str] = CONTROL_PLANE_SERVERS,
 ) -> list[dict[str, Any]]:
     """The ``mcpServers`` array for a single-binary harness, both halves of it.
 
@@ -254,7 +356,10 @@ def place_single_binary_array(
     servers whose restriction this session cannot put in force; they are withheld
     whole, which is the only faithful action left for them. Crew's identity-bound
     servers are withheld from the spec-described half for the reason
-    :func:`~kiro_crew.providers.mirrors.identity.withheld_servers` gives.
+    :func:`~kiro_crew.providers.mirrors.identity.withheld_servers` gives, unless the
+    caller re-derived them from Crew's managed source and named them in
+    *identity_mounted*; those elements carry this session's identity and are safe
+    to mount. *identity_names* is then the population that may receive it.
 
     ONE owner for both halves. The shared MCP gateway's broker stubs carry the SAME
     name as the spec entry each one rewrites, so a stub appended after this withheld
@@ -264,10 +369,22 @@ def place_single_binary_array(
     allowlist from the same parse, and go through the same stdio tag strip as the
     translated half.
     """
-    withheld = withheld_servers(frozenset()) | unhonoured
+    withheld = (
+        (withheld_servers(frozenset()) - frozenset(identity_mounted))
+        | frozenset(excluded_servers)
+        | unhonoured
+    )
     kept: list[dict[str, Any]] = []
     for element in projection.servers:
         name = element.get("name")
+        if name in excluded_servers:
+            logger.info(
+                "%s session MCP: withholding server %r -- the agent spec's excludedTools "
+                "switches it off whole",
+                label,
+                name,
+            )
+            continue
         if name in unhonoured:
             logger.warning(
                 "%s session MCP: withholding server %r -- one of its tools is switched off "
@@ -294,7 +411,11 @@ def place_single_binary_array(
             continue
         kept.append(element)
     out: list[dict[str, Any]] = opencode_elements(
-        kept, session_key=session_key, channel_id=channel_id, session_token=session_token
+        kept,
+        session_key=session_key,
+        channel_id=channel_id,
+        session_token=session_token,
+        identity_names=identity_names,
     )
     for stub in stub_elements:
         if not isinstance(stub, Mapping):
@@ -319,6 +440,41 @@ def place_single_binary_array(
             continue
         out.append(without_stdio_tag(dict(stub)))
     return out
+
+
+def _with_managed_identity_servers(
+    projection: SessionMcpProjection,
+) -> SessionMcpProjection:
+    """Replace the dashboard-facing managed servers with Crew's own launch.
+
+    ``session_mcp_servers`` re-derives only the two control-plane servers from the
+    managed source; every other managed server reaches the array from the spec. For
+    opencode that leaves them unusable (no session identity) and therefore withheld.
+    Re-deriving the guide/mate set here is what lets the array carry their identity:
+    the command, args and env are Crew's own, so handing them
+    ``KIROCREW_SESSION_KEY`` cannot be steered by a hand-edited spec line. A name
+    whose managed launch is unavailable is dropped rather than mounted with the
+    spec's invocation.
+    """
+    from kiro_crew.acp import session_mcp as session_mcp_mod
+
+    rebuilt: list[dict[str, Any]] = []
+    for element in projection.servers:
+        name = str(element.get("name") or "")
+        if name in _OPENCODE_IDENTITY_SERVERS:
+            managed = session_mcp_mod.managed_mcp_spec_entry(name, include_opt_in=True)
+            replacement = acp_server_element(name, managed) if managed is not None else None
+            if replacement is None:
+                logger.warning(
+                    "opencode session MCP: withholding server %r -- its managed launch is "
+                    "unavailable, and the spec's invocation cannot carry this session's "
+                    "identity",
+                    name,
+                )
+                continue
+            element = replacement
+        rebuilt.append(element)
+    return projection._replace(servers=rebuilt)
 
 
 def opencode_projection(
@@ -360,17 +516,32 @@ def opencode_projection(
 
     Blocking (parses the agent spec once), so callers run it off the event loop.
     """
-    projection = session_mcp_projection(
-        agent,
-        stub_server_names=stub_server_names,
-        work_dir=work_dir,  # type: ignore[arg-type]
+    projection = _with_managed_identity_servers(
+        session_mcp_projection(
+            agent,
+            stub_server_names=stub_server_names,
+            work_dir=work_dir,  # type: ignore[arg-type]
+            session_key=session_key,
+            worker_tool_limits_honoured=True,
+        )
     )
+    native, extra_pairs, excluded_servers, unknown = opencode_excluded_tools(projection.agent_spec)
+    if unknown:
+        raise ValueError(
+            "opencode cannot translate the agent spec's excludedTools: "
+            + ", ".join(sorted({repr(name) for name in unknown}))
+        )
+    if extra_pairs:
+        projection = projection._replace(disabled_tools=projection.disabled_tools | extra_pairs)
     rules = opencode_deny_rules(projection.disabled_tools)
     in_force = frozenset(rules if denies_in_force is None else denies_in_force)
-    unhonoured = frozenset(
-        server
-        for server, tool in projection.disabled_tools
-        if opencode_tool_id(server, tool) not in in_force
+    unhonoured = (
+        frozenset(
+            server
+            for server, tool in projection.disabled_tools
+            if opencode_tool_id(server, tool) not in in_force
+        )
+        | excluded_servers
     )
     for server in sorted(unhonoured):
         logger.warning(
@@ -385,10 +556,13 @@ def opencode_projection(
         projection,
         label="opencode",
         unhonoured=unhonoured,
+        excluded_servers=excluded_servers,
         stub_elements=stub_elements,
         session_key=session_key,
         channel_id=channel_id,
         session_token=session_token,
+        identity_mounted=_OPENCODE_IDENTITY_SERVERS,
+        identity_names=_OPENCODE_IDENTITY_NAMES,
     )
     return SessionProjection(
         params={"mcpServers": out},
@@ -398,6 +572,7 @@ def opencode_projection(
         restricted_servers=unhonoured,
         unhonoured_servers=unhonoured,
         harness_deny_rules=rules,
+        native_disabled_tools=native,
         derived_spec_snapshot=projection.derived_spec_snapshot,
         zero_tools=projection.zero_tools,
         agent_spec=projection.agent_spec,

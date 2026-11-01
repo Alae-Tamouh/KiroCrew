@@ -158,6 +158,14 @@ class SessionProjection:
     ``OPENCODE_CONFIG_CONTENT``). Carried beside the params, not inside them, for
     the reason ``denied_tools`` is. Empty everywhere else.
     """
+    native_disabled_tools: tuple[str, ...] = ()
+    """Native tool ids the HARNESS must disable, in its own spelling.
+
+    A save/worker spec's ``excludedTools`` can name built-in tools (shell, file
+    writes) as well as MCP tools. A backend with a native tool-disable channel
+    (opencode's ``tools`` config) carries them here; a backend without one
+    refuses the session rather than run wider than saved. Empty elsewhere.
+    """
     agent_spec: dict[str, Any] | None = None
     """The exact parsed spec this projection consumed; absent when withheld."""
 

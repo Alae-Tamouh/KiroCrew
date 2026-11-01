@@ -87,7 +87,7 @@ def goose_agents_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(
         session_mcp,
         "managed_mcp_spec_entry",
-        lambda name: dict(managed[name]) if name in managed else None,
+        lambda name, include_opt_in=False: dict(managed[name]) if name in managed else None,
     )
     monkeypatch.setattr(session_mcp, "_mcp_registry_mode", lambda: False)
     (d / "kirocrew.json").write_text(
@@ -644,7 +644,7 @@ class TestOpencodeSessionArray:
         monkeypatch.setattr(
             session_mcp,
             "managed_mcp_spec_entry",
-            lambda name: dict(managed[name]) if name in managed else None,
+            lambda name, include_opt_in=False: dict(managed[name]) if name in managed else None,
         )
         monkeypatch.setattr(session_mcp, "_mcp_registry_mode", lambda: False)
         (d / "kirocrew.json").write_text(

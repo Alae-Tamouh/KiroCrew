@@ -71,6 +71,10 @@ from kiro_crew.agent_sdk.backends import (
 # ``test/fixtures/acp_frames/pi/saved-spec-projection-live.jsonl`` is a member session on
 # pi-acp 0.0.34 over pi 1.3.0 whose saved spec the client confirmed after
 # ``session/new``; the same drive with the spec edited after its save was refused.
+# opencode is captured live on opencode 1.19.1:
+# ``test/fixtures/acp_frames/opencode/member-dispatch-live.jsonl`` is a member-key
+# session on that backend; the saved-spec array rides the same ``session/new``
+# path (``test/fixtures/acp_frames/opencode/session-live.jsonl``).
 ACP_BACKENDS_MEMBER_CAPABILITIES = frozenset(
     {
         ACP_BACKEND_KIRO,
@@ -78,6 +82,7 @@ ACP_BACKENDS_MEMBER_CAPABILITIES = frozenset(
         ACP_BACKEND_CLAUDE,
         ACP_BACKEND_CODEX,
         ACP_BACKEND_DEEPSEEK,
+        ACP_BACKEND_OPENCODE,
         ACP_BACKEND_PI,
     }
 )
@@ -89,7 +94,7 @@ ACP_BACKENDS_MEMBER_CAPABILITIES = frozenset(
 # there with those tools on. A saved spec that uses it is refused before spawn on
 # a non-member (``capability_tool_limits_unsupported``) rather than run wider than
 # it was saved.
-ACP_BACKENDS_MEMBER_TOOL_LIMITS = frozenset({ACP_BACKEND_KIRO})
+ACP_BACKENDS_MEMBER_TOOL_LIMITS = frozenset({ACP_BACKEND_KIRO, ACP_BACKEND_OPENCODE})
 
 # Backends that honour a crewmate WORKER's single-tool limits. The worker's spec
 # is built per session (``mate_worker.worker_session_spec``), with every tool the
@@ -103,7 +108,10 @@ ACP_BACKENDS_MEMBER_TOOL_LIMITS = frozenset({ACP_BACKEND_KIRO})
 # ``test/fixtures/acp_frames/kas/worker-kit-live.jsonl``. A crewmate file's
 # ``excludedTools [shell]``, carried in the worker's customAgents entry, withheld
 # ``shell``: the model listed only the ``read`` tools.
-ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS = frozenset({ACP_BACKEND_KAS})
+# opencode translates native excludes into its ``tools`` map and MCP excludes
+# into its permission deny rules; the member-dispatch capture is
+# ``test/fixtures/acp_frames/opencode/member-dispatch-live.jsonl``.
+ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS = frozenset({ACP_BACKEND_KAS, ACP_BACKEND_OPENCODE})
 
 # Backends that carry a crewmate WORKER's per-session spec (its kit): a spec built
 # per session from the worker base plus that crewmate's own file
@@ -123,7 +131,12 @@ ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS = frozenset({ACP_BACKEND_KAS})
 # ``test/fixtures/acp_frames/claude/saved-spec-projection-live.jsonl``. The server a
 # spec declares, projected into the ``session/new`` array, ran in the session; the
 # worker's spec reaches claude through that same array.
-ACP_BACKENDS_MATE_WORKER_KIT = frozenset({ACP_BACKEND_KAS, ACP_BACKEND_CLAUDE})
+# opencode is captured live on opencode 1.19.1:
+# ``test/fixtures/acp_frames/opencode/member-dispatch-live.jsonl`` exercises the
+# per-session array path a worker's kit uses.
+ACP_BACKENDS_MATE_WORKER_KIT = frozenset(
+    {ACP_BACKEND_KAS, ACP_BACKEND_CLAUDE, ACP_BACKEND_OPENCODE}
+)
 
 # Backends of the set above whose worker gets its prompt only from the
 # ``[AGENT SYSTEM PROMPT]`` context block: their mirrors project no spec prompt
@@ -131,7 +144,7 @@ ACP_BACKENDS_MATE_WORKER_KIT = frozenset({ACP_BACKEND_KAS, ACP_BACKEND_CLAUDE})
 # principles and its crewmate's prompt (``context_assembly.agent_spec
 # ._crewmate_worker_prompt``). KAS is not here: its wire spec already carries both,
 # so its block stays the base.
-ACP_BACKENDS_MATE_WORKER_PROMPT_IN_CONTEXT = frozenset({ACP_BACKEND_CLAUDE})
+ACP_BACKENDS_MATE_WORKER_PROMPT_IN_CONTEXT = frozenset({ACP_BACKEND_CLAUDE, ACP_BACKEND_OPENCODE})
 
 # Backends that can mount a DIFFERENT MCP tool set on one session than the
 # on-disk agent template declares — the capability crew-member dispatch rides

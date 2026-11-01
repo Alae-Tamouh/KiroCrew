@@ -37,6 +37,7 @@ from kiro_crew.providers.mirrors.opencode import (
     OpenCodeMirror,
     opencode_deny_rules,
     opencode_elements,
+    opencode_excluded_tools,
     opencode_projection,
     opencode_tool_id,
     without_stdio_tag,
@@ -64,20 +65,33 @@ def agents_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_mod, "KIRO_AGENTS_DIR", d)
     monkeypatch.setattr(agent_mod, "_KIRO_MCP_JSON", tmp_path / "settings-mcp.json")
     monkeypatch.setattr(session_mcp, "ensure_agent_materialized", lambda _a: True)
-    managed = {"kirocrew-core": dict(_CORE), "kirocrew-cron": dict(_CRON)}
+    managed = {
+        name: {"command": "/opt/kirocrew", "args": [f"mcp-{name}"]}
+        for name in session_mcp.IDENTITY_BOUND_SERVERS
+    }
+    managed["kirocrew-core"] = dict(_CORE)
+    managed["kirocrew-cron"] = dict(_CRON)
     monkeypatch.setattr(
         session_mcp,
         "managed_mcp_spec_entry",
-        lambda name: dict(managed[name]) if name in managed else None,
+        lambda name, include_opt_in=False: dict(managed[name]) if name in managed else None,
     )
     monkeypatch.setattr(session_mcp, "_mcp_registry_mode", lambda: False)
     return d
 
 
-def _write_spec(agents_dir: Path, *, servers: dict, tools: list | None) -> None:
+def _write_spec(
+    agents_dir: Path,
+    *,
+    servers: dict,
+    tools: list | None,
+    excluded_tools: list | None = None,
+) -> None:
     spec: dict = {"name": "kirocrew", "mcpServers": servers}
     if tools is not None:
         spec["tools"] = tools
+    if excluded_tools is not None:
+        spec["excludedTools"] = excluded_tools
     (agents_dir / "kirocrew.json").write_text(json.dumps(spec), encoding="utf-8")
 
 
@@ -378,6 +392,41 @@ class TestPerToolDenyRules:
         assert projection.unhonoured_servers == frozenset()
         assert projection.restricted_servers == frozenset()
 
+    def test_excluded_tools_split_into_the_three_channels(self):
+        native, pairs, servers, unknown = opencode_excluded_tools(
+            {
+                "excludedTools": [
+                    "fs_write",
+                    "@narrowed/danger",
+                    "@notes",
+                    "code",
+                ]
+            }
+        )
+        assert native == ("edit", "write")
+        assert pairs == frozenset({("narrowed", "danger")})
+        assert servers == frozenset({"notes"})
+        assert unknown == ("code",)
+
+    def test_worker_native_excludes_and_whole_server_choices_are_projected(self, agents_dir):
+        _write_spec(
+            agents_dir,
+            servers={"narrowed": {"command": "/bin/x"}, "notes": {"command": "/bin/x"}},
+            tools=["@narrowed", "@notes"],
+            excluded_tools=["fs_write", "@narrowed/danger", "@notes"],
+        )
+        projection = opencode_projection("kirocrew")
+        names = [e["name"] for e in projection.params["mcpServers"]]
+        assert "narrowed" in names
+        assert "notes" not in names
+        assert projection.native_disabled_tools == ("edit", "write")
+        assert "narrowed_danger" in projection.harness_deny_rules
+
+    def test_an_untranslatable_native_exclude_refuses_the_projection(self, agents_dir):
+        _write_spec(agents_dir, servers={}, tools=None, excluded_tools=["code"])
+        with pytest.raises(ValueError, match="excludedTools"):
+            opencode_projection("kirocrew")
+
     def test_a_third_party_server_narrowed_only_in_the_global_file_gets_its_rule(
         self, agents_dir, tmp_path, monkeypatch
     ):
@@ -478,19 +527,41 @@ class TestPerToolDenyRules:
         reason = OpenCodeMirror().rulings()[Concern.DENIED_TOOLS].reason
         assert "deny" in reason and "fused" in reason
 
-    def test_crews_other_managed_servers_are_withheld_rather_than_mounted_unusable(
-        self, agents_dir, monkeypatch
+    def test_crews_guide_mate_work_and_crew_log_are_mounted_from_the_managed_source(
+        self, agents_dir
     ):
-        """A managed Crew server that is not the control plane reaches the array from
-        the spec unreplaced, so it would come up bound to no session and answer
-        ``not_bound`` to every call -- the present-but-unusable shape this folder
-        exists to remove."""
-        bound = sorted(identity_bound_crew_servers())
-        assert bound, "the identity-bound set is empty, so this test proves nothing"
-        name = bound[0]
-        _write_spec(agents_dir, servers={name: {"command": "/bin/x"}}, tools=[f"@{name}"])
-        names = [e["name"] for e in opencode_projection("kirocrew").params["mcpServers"]]
-        assert name not in names
+        """The dashboard-facing managed servers are re-derived from Crew's own
+        launch, then given this session's identity -- never mounted from the spec's
+        invocation. Member control and the panel stay out of this half; the member
+        mounts append them. Work and crew-log are opt-in and ride the same path."""
+        _write_spec(
+            agents_dir,
+            servers={
+                "kirocrew-guide": {"command": "/bin/x"},
+                "kirocrew-mate": {"command": "/bin/x"},
+                "kirocrew-work": {"command": "/bin/x"},
+                "kirocrew-crew-log": {"command": "/bin/x"},
+                "kirocrew-dashboard": {"command": "/bin/x"},
+                "kirocrew-computer": {"command": "/bin/x"},
+            },
+            tools=[
+                "@kirocrew-guide",
+                "@kirocrew-mate",
+                "@kirocrew-work",
+                "@kirocrew-crew-log",
+                "@kirocrew-dashboard",
+                "@kirocrew-computer",
+            ],
+        )
+        elements = _by_name(
+            opencode_projection("kirocrew", session_key="sk-1").params["mcpServers"]
+        )
+        for name in ("kirocrew-guide", "kirocrew-mate", "kirocrew-work", "kirocrew-crew-log"):
+            assert name in elements
+            assert elements[name]["command"] != "/bin/x"
+            assert _env(elements[name])["KIROCREW_SESSION_KEY"] == "sk-1"
+        assert "kirocrew-dashboard" not in elements
+        assert "kirocrew-computer" not in elements
 
     def test_the_identity_bound_set_never_includes_the_control_plane(self):
         assert not identity_bound_crew_servers() & set(session_mcp.CONTROL_PLANE_SERVERS)

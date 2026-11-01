@@ -21,6 +21,7 @@ from kiro_crew.acp_backends import (
     ACP_BACKEND_DEEPSEEK,
     ACP_BACKEND_KAS,
     ACP_BACKEND_KIRO,
+    ACP_BACKEND_OPENCODE,
     ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS,
 )
 from kiro_crew.mate_worker import MATE_WORKER_AGENT
@@ -191,9 +192,22 @@ def test_kas_honours_a_workers_single_tool_limits_and_the_mirrors_refuse_them(pi
     spec = mate_worker.worker_session_spec(dict(BASE), "dashboard:chat-9")
     assert "@jira/x" in spec["excludedTools"]
     assert ACP_BACKEND_KAS in ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS
+    assert ACP_BACKEND_OPENCODE in ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS
     assert ACP_BACKEND_CLAUDE not in ACP_BACKENDS_MATE_WORKER_TOOL_LIMITS
     # Opt-in: a provider that does not declare it refuses a limited worker.
     assert LLMProvider.mate_worker_tool_limits_supported.fget(object()) is False
+
+
+def test_opencode_honours_native_and_mcp_worker_limits(pixel_worker):
+    """OpenCode disables native tools through ``tools`` and MCP tools through
+    permission denies, so a limited worker is not refused there."""
+    from kiro_crew.providers.mirrors.opencode import opencode_projection
+
+    limited = {**PIXEL, "excludedTools": ["fs_write", "@jira/delete_issue"]}
+    (pixel_worker / "pixel.json").write_text(json.dumps(limited), encoding="utf-8")
+    projection = opencode_projection(MATE_WORKER_AGENT, session_key="dashboard:chat-9")
+    assert projection.native_disabled_tools == ("edit", "write")
+    assert "jira_delete_issue" in projection.harness_deny_rules
 
 
 def test_a_default_template_crewmate_adds_no_stub_to_the_block(pixel_worker, monkeypatch):

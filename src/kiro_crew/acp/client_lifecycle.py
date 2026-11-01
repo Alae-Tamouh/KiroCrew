@@ -687,6 +687,7 @@ def _reset_state(self: AcpClient) -> None:
     self._spec_zero_tools = False
     self._session_mcp_unhonoured = frozenset()
     self._session_harness_deny_rules = ()
+    self._session_native_disabled_tools = ()
     self._opencode_denies_in_force = None
     self._opencode_denies_unenforced = frozenset()
     self._opencode_native_mounts = frozenset()

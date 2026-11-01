@@ -182,16 +182,21 @@ def read_effective_model(source: object) -> str:
     Walks the wrapper chain via :func:`_wrapper_chain` rather than a fixed depth,
     because a default Kiro turn hides the resolved id two levels down.
 
-    Two passes over the collected chain, because a resolved id **anywhere** beats
-    a plain ``_model`` anywhere: ``_resolved_model_id`` is the id the backend
-    actually settled on (the same precedence ``AcpClient`` uses internally,
-    ``self._resolved_model_id or self._model``), while ``_model`` may still hold
-    the ``"auto"`` sentinel or a pre-resolution request. Skips ``"auto"``. Never
-    raises.
+    Three attributes are tried in precedence order: ``_resolved_model_id`` (the id
+    the backend settled on), ``served_model`` (the public accessor the session
+    handle and the background adapter expose), then ``_model`` (which may still
+    hold the ``"auto"`` sentinel or a pre-resolution request). A resolved id
+    **anywhere** beats a plain ``_model`` anywhere. Skips ``"auto"``. Never raises.
     """
     try:
         chain = _wrapper_chain(source)
-        for attr in ("_resolved_model_id", "_model"):
+        # ``served_model`` is checked after the private resolved id and before the
+        # requested ``_model``: it is the public accessor the session handle and the
+        # background adapter expose, so a provider that never mirrors the resolved
+        # id onto ``_resolved_model_id`` still attributes its turn. Keeping
+        # ``_resolved_model_id`` first preserves the existing precedence when a
+        # requested alias and a backend-confirmed id disagree.
+        for attr in ("_resolved_model_id", "served_model", "_model"):
             for node in chain:
                 candidate = getattr(node, attr, "")
                 if isinstance(candidate, str) and candidate and candidate.strip().lower() != "auto":
@@ -220,7 +225,7 @@ def _source_requests_auto(source: object) -> bool:
             isinstance(candidate := getattr(node, attr, ""), str)
             and candidate.strip().lower() == "auto"
             for node in _wrapper_chain(source)
-            for attr in ("_model", "_resolved_model_id")
+            for attr in ("_model", "_resolved_model_id", "served_model")
         )
     except Exception:
         return False

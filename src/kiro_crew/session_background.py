@@ -260,6 +260,21 @@ class _ProviderBgSession:
         except Exception:
             return ""
 
+    @property
+    def served_model(self) -> str:
+        """The model the shared provider reports, for usage-row attribution.
+
+        Background turns pass this adapter as ``model_source``. The adapter is not
+        an ``AcpSessionHandle`` and the model lives on the provider behind ``_sess``,
+        so without this read a billed background row is persisted with a blank
+        model and the warning at the write site fires on every title/folder-suggest
+        turn. Never raises: attribution must not fail the turn.
+        """
+        try:
+            return str(getattr(self._sess.provider, "served_model", "") or "")
+        except Exception:
+            return ""
+
     def _release(self) -> None:
         if self._sem_held:
             self._sem_held = False

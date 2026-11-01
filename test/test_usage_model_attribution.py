@@ -24,6 +24,7 @@ from kiro_crew.dashboard.handlers.usage import (
     read_effective_model,
     read_turn_model,
 )
+from kiro_crew.session_background import _ProviderBgSession
 
 # ── model attribution through wrapper layers ────────────────────────────
 #
@@ -333,6 +334,29 @@ class TestBlankModelBilledRowIsLoud:
                 "slot", "", SimpleNamespace(usage=usage), "acp", now
             )
             assert usage_mod._record_is_billed(record) == usage_has_billing(usage), field.name
+
+    def test_background_adapter_attributes_the_served_model(self, tmp_path, monkeypatch, caplog):
+        """The shared ``_bg`` adapter exposes the model through ``served_model``.
+
+        A background usage row passes that adapter as ``model_source``; without the
+        public accessor on the walk the billed row lands blank and the write-site
+        warning fires for every title and folder-suggest turn.
+        """
+        shard_dir = self._shard_dir(monkeypatch, tmp_path)
+        provider = SimpleNamespace(served_model="opencode-go/deepseek-v4.1-flash")
+        source = _ProviderBgSession(SimpleNamespace(provider=provider))
+        with caplog.at_level(logging.WARNING, logger=usage_mod.__name__):
+            persist_token_record(
+                "_bg",
+                "",
+                SimpleNamespace(credits=2.5),
+                provider="opencode",
+                surface="bg:bg_oneliner",
+                model_source=source,
+            )
+        rows = self._rows(shard_dir)
+        assert rows[0]["model"] == "opencode-go/deepseek-v4.1-flash"
+        assert self._attribution_warnings(caplog) == []
 
     def test_attributed_row_is_quiet(self, tmp_path, monkeypatch, caplog):
         self._shard_dir(monkeypatch, tmp_path)

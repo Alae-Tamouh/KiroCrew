@@ -1451,6 +1451,19 @@ class TestReadEffectiveModel:
     def test_reads_direct_model_attr(self):
         assert read_effective_model(_Inner("claude-sonnet-4.5")) == "claude-sonnet-4.5"
 
+    def test_reads_public_served_model(self):
+        # The background adapter exposes the model only through this accessor.
+        src = type("P", (), {"served_model": "opencode-go/deepseek-v4.1-flash"})()
+        assert read_effective_model(src) == "opencode-go/deepseek-v4.1-flash"
+
+    def test_resolved_id_beats_served_model(self):
+        src = type(
+            "P",
+            (),
+            {"_resolved_model_id": "backend-confirmed", "served_model": "requested"},
+        )()
+        assert read_effective_model(src) == "backend-confirmed"
+
     def test_skips_auto_sentinel(self):
         # "auto" means "backend chooses" — not a model, so not attribution data.
         assert read_effective_model(_Inner("auto")) == ""
@@ -1537,6 +1550,10 @@ class TestReadTurnModel:
     def test_auto_found_deeper_in_the_chain(self):
         inner = type("Handle", (), {"_model": "auto"})()
         assert read_turn_model(type("P", (), {"_handle": inner})()) == "auto"
+
+    def test_auto_found_on_the_public_served_model(self):
+        src = type("P", (), {"served_model": "auto"})()
+        assert read_turn_model(src) == "auto"
 
     def test_no_model_information_stays_blank(self):
         # Distinct from the Auto case: nothing is known, so nothing is claimed.

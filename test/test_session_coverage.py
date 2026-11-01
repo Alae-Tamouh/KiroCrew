@@ -317,6 +317,12 @@ class _SidRaisingProvider(_StreamingProvider):
         raise RuntimeError("no native session yet")
 
 
+class _ModelRaisingProvider(_StreamingProvider):
+    @property
+    def served_model(self) -> str:
+        raise RuntimeError("no model yet")
+
+
 class TestProviderBgSession:
     """The non-kiro ``_bg`` adapter. All callers share ONE provider session, so
     the ``Semaphore(1)`` is the only thing serializing them."""
@@ -329,6 +335,18 @@ class TestProviderBgSession:
         """Reading the id must never break a caller that only wants to log it."""
         sess = _Session(provider=_SidRaisingProvider())
         assert _ProviderBgSession(sess).session_id == ""
+
+    def test_served_model_is_read_through(self) -> None:
+        """Usage attribution reads the model the shared provider actually served."""
+        provider = _StreamingProvider()
+        provider.served_model = "opencode-go/deepseek-v4.1-flash"
+        sess = _Session(provider=provider)
+        assert _ProviderBgSession(sess).served_model == "opencode-go/deepseek-v4.1-flash"
+
+    def test_served_model_swallows_a_provider_error(self) -> None:
+        """A provider that has not reported a model yet must not fail the turn."""
+        sess = _Session(provider=_ModelRaisingProvider())
+        assert _ProviderBgSession(sess).served_model == ""
 
     @pytest.mark.asyncio
     async def test_prompt_holds_the_semaphore_and_releases_on_exhaustion(self) -> None:

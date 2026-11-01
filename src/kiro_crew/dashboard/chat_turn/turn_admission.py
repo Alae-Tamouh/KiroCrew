@@ -17,7 +17,7 @@ from kiro_crew.dashboard.chat_utils import (
     slot_history_key,
     tighten_live_slot_memory_mode,
 )
-from kiro_crew.dashboard.state import durable_row_count
+from kiro_crew.dashboard.state import durable_row_count, is_turn_interrupted
 from kiro_crew.llm_helpers import _billing_stats
 from kiro_crew.members import DM_SLOT_MODE, is_dispatchable_member_name, member_lifecycle
 from kiro_crew.platform import redact_log_via_context
@@ -781,6 +781,22 @@ async def _turn_admit(turn: _ChatTurn) -> _Flow | None:
     # helper must take only ``_model_pick_lock`` -- that lock is not reentrant,
     # and re-acquiring it here would hang the turn at session creation.
     await apply_deferred_model_switch(state, slot, session_lock_held=True)
+    # A dropped connection or a soft Stop can leave a native tool call open on
+    # the ACP session. The transcript then has a tool row with no ``meta.done``
+    # and the harness waits forever for a result nobody will send. A typed
+    # follow-up (not only the Continue button) must not resume that session:
+    # arm the deferred reset consumed immediately below, so the session is
+    # recreated from history before this turn is dispatched.
+    if not slot._pending_reset_history_key and is_turn_interrupted(slot.messages):
+        for _message in reversed(slot.messages):
+            _role = _message.get("role", "")
+            if _role == "user" and _message.get("content"):
+                break
+            if _role == "tool":
+                _meta = _message.get("meta")
+                if not isinstance(_meta, dict) or _meta.get("done") is not True:
+                    slot._pending_reset_history_key = session_key
+                    break
     # Consume a deferred project-change reset queued while idle, before
     # get_or_create or we'd reuse the stale session for one turn. Safe even
     # though the dispatch lock (slot_switch_session_lock) is held here: reset()

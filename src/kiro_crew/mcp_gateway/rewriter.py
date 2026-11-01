@@ -134,9 +134,38 @@ def take_pass_inputs(overlay_dir: Path) -> dict[str, Any] | None:
         return _PASS_INPUTS.pop(str(overlay_dir), None)
 
 
+def _source_files(source_dir: Path, extra_source_dirs: Collection[Path]) -> list[Path]:
+    """Every spec file this pass rewrites, extras ahead of the primary.
+
+    The primary is the user's ``~/.kiro/agents``. Extras are Crew-owned
+    directories such as ``~/.kiro/mates/agents``; a name or stem an extra
+    declares shadows the primary's, because the extra spec is the one a
+    member session runs under that agent name. Extras lead the returned list
+    so the overlay claim -- and therefore the written overlay -- belongs to
+    the extra. ``iter_agent_spec_files`` already handles the JSON/Markdown
+    twin inside one directory; a missing extra directory contributes nothing.
+    """
+    primary = list(iter_agent_spec_files(source_dir)) if source_dir.is_dir() else []
+    extra: list[Path] = []
+    for directory in extra_source_dirs:
+        if directory.is_dir():
+            extra.extend(iter_agent_spec_files(directory))
+    if not extra:
+        return primary
+    extra_names = {path.name for path in extra}
+    extra_stems = {path.stem.casefold() for path in extra}
+    kept = [
+        path
+        for path in primary
+        if path.name not in extra_names and path.stem.casefold() not in extra_stems
+    ]
+    return [*extra, *kept]
+
+
 def _rewrite_inputs_fingerprint(
     *,
     source_dir: Path,
+    extra_source_dirs: Collection[Path] = (),
     settings_path: Path,
     overlay_dir: Path,
     socket_path: Path,
@@ -154,7 +183,8 @@ def _rewrite_inputs_fingerprint(
 
     Enumerated against the code, not guessed:
 
-    * ``sources`` / ``settings`` — the parsed spec files (size+mtime+digest).
+    * ``sources`` / ``settings`` — the parsed spec files (size+mtime+digest),
+      from the primary directory and every extra source directory.
     * ``socket_path`` / ``work_dir`` — baked into stub argv and the PoolKey.
     * ``sandbox_mode`` / ``approval_mode`` / ``stub_servers`` /
       ``pooling_enabled`` — decide stub flags and which entries are shareable.
@@ -197,7 +227,7 @@ def _rewrite_inputs_fingerprint(
     * ``schema`` / ``package`` — invalidate on rewriter logic changes.
     """
     sources: dict[str, list[Any] | None] = {
-        p.name: _source_sig(p) for p in iter_agent_spec_files(source_dir)
+        p.name: _source_sig(p) for p in _source_files(source_dir, extra_source_dirs)
     }
     return {
         "schema": _FINGERPRINT_SCHEMA,
@@ -218,6 +248,7 @@ def _rewrite_inputs_fingerprint(
         # changes -- the same failure mode ``pool_identity_env`` above records.
         "read_buffer_limit": int(read_buffer_limit),
         "source_dir": str(source_dir),
+        "extra_source_dirs": [str(path) for path in extra_source_dirs],
         "overlay_dir": str(overlay_dir),
         "socket_path": str(socket_path),
         "work_dir": str(work_dir),
@@ -540,6 +571,7 @@ def _overlay_names_collide(overlay_dir: Path, first: str, second: str) -> bool:
 def rewrite_agents(
     *,
     source_dir: Path,
+    extra_source_dirs: Collection[Path] = (),
     overlay_dir: Path,
     socket_path: Path,
     work_dir: Path,
@@ -549,9 +581,9 @@ def rewrite_agents(
     pooling_enabled: bool = True,
     approvals: LaunchApprovals | None = None,
 ) -> tuple[dict[str, int], dict[str, str]]:
-    """Populate ``overlay_dir`` with rewritten copies of ``source_dir/*.json``.
+    """Populate ``overlay_dir`` with rewritten copies of every agent spec.
 
-    Never modifies ``source_dir``. Idempotent — safe to call on every
+    Never modifies a source directory. Idempotent — safe to call on every
     Kiro Crew startup. When no input changed since the last completed run
     (see :func:`_rewrite_inputs_fingerprint`) the rewrite loop is skipped and
     the cached ``(results, target_env)`` is returned; the stale-file prune
@@ -559,8 +591,13 @@ def rewrite_agents(
 
     Args:
         source_dir: Usually ``~/.kiro/agents/``.
+        extra_source_dirs: Additional Crew-owned spec directories, usually
+            ``~/.kiro/mates/agents/``. A spec here shadows the primary's for
+            the same file name or stem, because it is the file a member
+            session runs under that agent name. Missing directories are
+            skipped.
         overlay_dir: Usually ``<config_dir>/mcp-gateway/agents/``. Created
-            if missing. Cleared of stale files not in ``source_dir``.
+            if missing. Cleared of stale files not in this pass's source set.
         socket_path: Absolute path to the gateway unix socket.
         work_dir: Default cwd passed to the stub (and used in PoolKey
             hashing). Created if missing; gatewayd sets it as the backend
@@ -623,7 +660,7 @@ def rewrite_agents(
     # fingerprint is loaded), because a loosened ACL is the one way the
     # leftover could stop being inert.
 
-    if not source_dir.is_dir():
+    if not source_dir.is_dir() and not any(directory.is_dir() for directory in extra_source_dirs):
         logger.warning("agent source dir missing: %s", source_dir)
         return {}, {}
 
@@ -666,6 +703,7 @@ def rewrite_agents(
     read_buffer_limit = config_read_buffer_limit()
     current_inputs = _rewrite_inputs_fingerprint(
         source_dir=source_dir,
+        extra_source_dirs=extra_source_dirs,
         settings_path=kiro_settings_json,
         overlay_dir=overlay_dir,
         socket_path=socket_path,
@@ -881,7 +919,7 @@ def rewrite_agents(
     # skipped for bad content claims nothing, so it cannot cost its valid twin
     # the overlay (and the pruning of the twin's stale one) below.
     overlay_keys_claimed: dict[str, str] = {}
-    for path in iter_agent_spec_files(source_dir):
+    for path in _source_files(source_dir, extra_source_dirs):
         # The overlay is JSON whatever the source: ``session_servers`` resolves
         # ``<agent>.json``. The fingerprint's ``sources`` stays keyed by the
         # SOURCE name, so a markdown edit invalidates its overlay.

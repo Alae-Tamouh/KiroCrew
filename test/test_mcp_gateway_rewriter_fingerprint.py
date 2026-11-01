@@ -46,6 +46,7 @@ def test_rewrite_agents_signature_is_pinned_to_fingerprint_inputs() -> None:
     """Every rewrite parameter must stay classified as fingerprinted or output-neutral."""
     assert set(inspect.signature(rewrite_agents).parameters) == {
         "source_dir",
+        "extra_source_dirs",
         "overlay_dir",
         "socket_path",
         "work_dir",

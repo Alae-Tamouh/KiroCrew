@@ -54,16 +54,23 @@ def rewrite_kwargs(cfg: KiroCrewConfig, stub_servers: frozenset[str]) -> dict[st
 
     One definition, used by the gateway's own rewrite and by
     :func:`resolve_launches`, so the launch approved at a decision is resolved
-    from exactly what the rewrite will read.
+    from exactly what the rewrite will read. The source set includes the
+    Crew-owned crewmate spec directory, because a member session runs those
+    specs through the same broker.
     """
     # Deferred: ``config.loader`` imports the rewriter's path helpers.
     from kiro_crew.config.loader import _session_work_dir
-    from kiro_crew.config.paths import kiro_agents_dir
+    from kiro_crew.config.paths import kiro_agents_dir, mate_agents_dir
     from kiro_crew.mcp_gateway.rewriter import default_socket_path, resolve_overlay_dir
 
     cfg_gw = cfg.mcp_gateway
     return {
         "source_dir": kiro_agents_dir(),
+        # Crewmate specs live outside ``~/.kiro/agents``. The broker has to
+        # rewrite them too, or a member session mounts its managed servers raw
+        # inside the sandbox -- where the credential and policy mask makes them
+        # fail closed -- instead of receiving the host-side stubs.
+        "extra_source_dirs": (mate_agents_dir(),),
         "overlay_dir": resolve_overlay_dir(cfg_gw.overlay_dir),
         "socket_path": Path(cfg_gw.socket_path) if cfg_gw.socket_path else default_socket_path(),
         "work_dir": _session_work_dir(None),

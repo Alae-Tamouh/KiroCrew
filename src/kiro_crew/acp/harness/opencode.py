@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import subprocess as subprocess_mod
+import tempfile
 from typing import Any, Collection
 
 from kiro_crew import acp_tool_gate
@@ -626,16 +627,32 @@ def _verify_opencode_routing(
     env["PATH"] = augmented_path(env.get("PATH", ""))
     env[_ENV_OPENCODE_CONFIG_CONTENT] = config_content
     try:
-        completed = subprocess_mod.run(
-            argv,
-            cwd=session._spawn_work_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=_OPENCODE_READBACK_TIMEOUT_S,
-        )
+        # Capture stdout in a file, never a pipe. opencode 1.19.5 truncates a
+        # piped ``debug config`` at exactly 128 KiB, and the resolved document
+        # legitimately exceeds that once its provider/model catalog is included
+        # (measured at 143,922 bytes here). A pipe cut the JSON mid-object and
+        # turned a valid config into "could not be parsed"; a file has no such
+        # cap. stderr stays a pipe: it is small, and it carries only the
+        # harness's own failure detail.
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+            completed = subprocess_mod.run(
+                argv,
+                cwd=session._spawn_work_dir,
+                env=env,
+                stdout=stdout_file,
+                stderr=subprocess_mod.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_OPENCODE_READBACK_TIMEOUT_S,
+            )
+            stdout_file.seek(0)
+            stdout = stdout_file.read().decode("utf-8", errors="replace")
+        # ``CompletedProcess.stdout`` is None whenever stdout is a file, so carry
+        # the captured bytes onto the result for the parser below. A caller that
+        # injects its own completed result (tests) keeps the stdout it supplied.
+        if completed.stdout is None:
+            completed.stdout = stdout
     except (OSError, subprocess_mod.SubprocessError) as exc:
         return (
             f"the resolved configuration could not be read back ({exc})",

@@ -46,6 +46,7 @@ from kiro_crew.acp_backends import (
     ACP_BACKEND_CLAUDE,
     ACP_BACKEND_DEEPSEEK,
     ACP_BACKEND_GOOSE,
+    ACP_BACKEND_OPENCODE,
     ACP_BACKEND_PI,
     ACP_BACKEND_STRANDS,
 )
@@ -491,6 +492,59 @@ def kas_consent_tool(params: object) -> tuple[str, str]:
     return crew_name, target.strip()
 
 
+def _opencode_pattern_tool_call(params: dict[str, Any]) -> dict[str, Any]:
+    """Synthesize the tool call an OpenCode pattern permission names.
+
+    OpenCode 1.19.5 can ask for a ``bash`` or ``external_directory`` permission
+    through a frame that carries ``permission`` + ``patterns`` instead of the
+    ACP ``toolCall`` object every older frame used. The ACP transport still
+    carries the request and its options, but without this bridge the event has
+    no title, no command, and no shell classification, so the host gate cannot
+    show or judge it; the harness then waits forever for an answer.
+
+    Only ``tool`` is used for identity (``callID``); the ``patterns`` are the
+    command/path set the harness would run, and are carried as the input the
+    approval card shows. The returned dict has the same fields the ordinary
+    ``toolCall`` branch reads, so all downstream classification stays shared.
+    """
+    permission = params.get("permission")
+    if not isinstance(permission, str) or not permission:
+        return {}
+    raw_patterns = params.get("patterns")
+    patterns = (
+        [str(p) for p in raw_patterns if isinstance(p, str)]
+        if isinstance(raw_patterns, list)
+        else []
+    )
+    tool = params.get("tool")
+    tool = tool if isinstance(tool, dict) else {}
+    call_id = tool.get("callID") or tool.get("callId") or params.get("toolCallId") or ""
+    title = params.get("title")
+    if not isinstance(title, str) or not title:
+        title = permission
+        if patterns:
+            title = f"{permission}: " + ", ".join(patterns)
+    kind = "execute" if permission == "bash" else ""
+    raw_input: Any = params.get("rawInput")
+    if not raw_input:
+        metadata = params.get("metadata")
+        raw_input = metadata if isinstance(metadata, dict) else {}
+        raw_input = {**raw_input, "permission": permission, "patterns": patterns}
+        if permission == "bash":
+            # The harness gives the command as its pattern set; the shared command
+            # deny/governance tiers read ``command``, so carry that spelling too.
+            raw_input["command"] = " ".join(patterns)
+        elif permission == "external_directory" and patterns:
+            raw_input["path"] = patterns[0]
+    return {
+        "toolCallId": call_id if isinstance(call_id, str) else "",
+        "title": title,
+        "kind": kind,
+        "rawInput": raw_input,
+        "input": raw_input,
+    }
+
+
 def build_permission_event(
     msg: JsonRpcMessage,
     *,
@@ -569,6 +623,8 @@ def build_permission_event(
     params = msg.params or {}
     tool_call = params.get("toolCall", {})
     tool_call = tool_call if isinstance(tool_call, dict) else {}
+    if not tool_call and harness_backend == ACP_BACKEND_OPENCODE:
+        tool_call = _opencode_pattern_tool_call(params)
     # A gate-extension dialog describes the DIALOG; the tool call it asks about is
     # in its envelope. Substitute that description for the frame's own so the rest
     # of this builder reads the real tool name, kind, id and arguments. The
@@ -766,6 +822,17 @@ def build_permission_event(
         _kas_tool, _spawn_target = kas_consent_tool(params)
         if _kas_tool:
             cached_shell = False
+    if (
+        cached_shell is None
+        and harness_backend == ACP_BACKEND_OPENCODE
+        and not params.get("toolCall")
+        and params.get("permission") == "bash"
+    ):
+        # The pattern bridge above is the adapter's own statement that this ask
+        # is the shell tool; there is no preceding tool_call frame to cache it
+        # from. Treat only this adapter-declared permission as shell, never the
+        # generic frame ``kind`` the deny-by-default rule distrusts.
+        cached_shell = True
     is_shell = bool(cached_shell)
     if cached_shell is None and tool_input:
         logger.info(

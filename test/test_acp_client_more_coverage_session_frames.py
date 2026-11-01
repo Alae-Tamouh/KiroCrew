@@ -822,3 +822,86 @@ class TestDrainPostCompactionMetadata:
         await client._drain_post_compaction_metadata(grace=5.0)
 
         assert client.last_prompt_stats.context_pct == 0.0
+
+
+# ── OpenCode 1.19.5 pattern permission requests ──
+#
+# OpenCode can ask for a bash command or an external-directory path through a
+# frame that names ``permission`` and ``patterns`` but carries no ACP
+# ``toolCall``. The adapter still needs the host to answer it, so the bridge
+# must turn that shape into the same permission event every other ask uses.
+
+
+class TestOpenCodePatternPermissionRequests:
+    def test_a_bash_pattern_ask_is_a_shell_permission(self, tmp_path):
+        from kiro_crew.acp_backends import ACP_BACKEND_OPENCODE
+
+        client = _client(tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
+        event = client._build_permission_event(
+            JsonRpcMessage(
+                id="per_1",
+                method="session/request_permission",
+                params={
+                    "sessionId": "ses-opencode",
+                    "permission": "bash",
+                    "patterns": ["ls -la /home/admin-ubuntu/kc/KiroCrew"],
+                    "tool": {"messageID": "msg-1", "callID": "call_1"},
+                },
+            )
+        )
+
+        assert event is not None
+        assert event.tool_call_id == "call_1"
+        assert event.is_shell is True
+        assert "ls -la /home/admin-ubuntu/kc/KiroCrew" in event.title
+        assert '"command": "ls -la /home/admin-ubuntu/kc/KiroCrew"' in event.tool_input
+        assert client._permission_options["per_1"]["once"] == "allow_once"
+
+    def test_an_external_directory_ask_is_attributed_to_the_path(self, tmp_path):
+        from kiro_crew.acp_backends import ACP_BACKEND_OPENCODE
+
+        client = _client(tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
+        event = client._build_permission_event(
+            JsonRpcMessage(
+                id="per_2",
+                method="session/request_permission",
+                params={
+                    "sessionId": "ses-opencode",
+                    "permission": "external_directory",
+                    "patterns": ["/home/admin-ubuntu/.config/opencode/*"],
+                    "tool": {"messageID": "msg-2", "callID": "call_2"},
+                },
+            )
+        )
+
+        assert event is not None
+        assert event.tool_call_id == "call_2"
+        assert event.is_shell is False
+        assert "external_directory" in event.title
+        assert "/home/admin-ubuntu/.config/opencode/*" in event.title
+        assert client._permission_options["per_2"]["once"] == "allow_once"
+
+    def test_a_regular_tool_call_still_wins_over_the_pattern_shape(self, tmp_path):
+        from kiro_crew.acp_backends import ACP_BACKEND_OPENCODE
+
+        client = _client(tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
+        event = client._build_permission_event(
+            JsonRpcMessage(
+                id="per_3",
+                method="session/request_permission",
+                params={
+                    "toolCall": {
+                        "toolCallId": "call_3",
+                        "title": "grep",
+                        "kind": "search",
+                    },
+                    "permission": "bash",
+                    "patterns": ["should-not-replace-the-tool-call"],
+                },
+            )
+        )
+
+        assert event is not None
+        assert event.tool_call_id == "call_3"
+        assert event.title == "grep"
+        assert event.is_shell is False

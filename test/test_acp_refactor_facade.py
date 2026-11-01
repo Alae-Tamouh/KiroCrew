@@ -403,7 +403,7 @@ _MOVED_METHODS: dict[str, dict[str, tuple[str, ...]]] = {
             # The version gate's probe reads the same client-owned
             # spawn-env internals as the routing read-back beside it, by the same
             # function-local import.
-            "_opencode_reported_major",
+            "_opencode_reported_version",
         ),
         "kiro_crew.acp.harness.pi": ("_verify_pi_gate",),
         "kiro_crew.acp.harness.deepseek": ("_verify_deepseek_gate",),
@@ -1406,7 +1406,7 @@ _SEAM_IMPORTS: dict[tuple[str, str], tuple[str, tuple[str, ...]]] = {
             # The version gate's probe builds its child's env by the SAME
             # bindings, so the probe's answer describes the environment the
             # read-back and the spawn actually run under.
-            ("kiro_crew.acp.harness.opencode", "_opencode_reported_major"),
+            ("kiro_crew.acp.harness.opencode", "_opencode_reported_version"),
         )
     },
 }

@@ -113,7 +113,7 @@ BENIGN_PACKAGE_SPAWNS: frozenset[str] = frozenset(
         # harness binary plus the literal words in ``_OPENCODE_VERSION_ARGS``
         # (``--version``) -- no shell, a 15s timeout, and a cwd that is the session
         # work dir rather than anything the agent names in a turn; the agent
-        # supplies nothing to it, and stdout is read for the major version alone.
+        # supplies nothing to it, and stdout is read for the full version alone.
         # SANDBOX-WRAPPED before it is spawned, exactly like the routing read-back
         # above: the caller (``_opencode_version_refusal``) hands it an argv already
         # through ``wrap_argv_async`` with the same ``extra_hidden_dirs`` credential
@@ -123,7 +123,7 @@ BENIGN_PACKAGE_SPAWNS: frozenset[str] = frozenset(
         # Called from a worker thread, never the event loop --
         # ``test_the_version_child_is_wrapped_like_the_read_back`` in
         # ``test/test_acp_opencode_backend.py`` pins that.
-        "acp/harness/opencode.py::_opencode_reported_major",
+        "acp/harness/opencode.py::_opencode_reported_version",
         # The pi gate read-back, the same shape as the opencode one above. ONE fixed
         # argv -- Kiro Crew's own gate launcher (a file this core wrote into the
         # sandbox run directory, execing the resolved ``pi`` binary) plus the three

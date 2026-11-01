@@ -62,20 +62,21 @@ OPENCODE_INSTALL_COMMAND = _OPENCODE_LAUNCH.install_command
 # harness's routing from a declared-but-unverified seed.
 _OPENCODE_CONFIG_READBACK_ARGS = ("debug", "config")
 # The flag that prints the resolved binary's own version. Every launch reads it
-# back fresh and refuses a major outside ``_OPENCODE_TESTED_MAJOR`` BEFORE the
+# back fresh and refuses anything outside ``_OPENCODE_TESTED_VERSION`` BEFORE the
 # read-back runs: the read-back's parser and the session spawn are measured only
-# against that major, and a PATH refresh onto another line must refuse rather
-# than let an unmeasured binary decide how the permission gate reads.
+# against that exact release, and a PATH refresh onto another line must refuse
+# rather than let an unmeasured binary decide how the permission gate reads.
 _OPENCODE_VERSION_ARGS = ("--version",)
-# The major line the whole launch has been measured against: the real-adapter
-# lane installs opencode-ai from a manifest pinned inside this major and drives
-# the spawn, the permission read-back and the MCP mount against it. The 2.x line
-# reworks the plugin API, the server API and the config file layout, and none of
-# that has been measured here -- so until those measurements are re-run against
-# a 2.x binary, the launch refuses one. Widen it only after re-measuring. It
-# lives beside the probe's argv -- the only code that reads it -- the way the pi
-# harness keeps its minimum version in its own module.
-_OPENCODE_TESTED_MAJOR = 1
+# The exact release the whole launch has been measured against: the local lane
+# installs opencode-ai at this version and drives the spawn, the permission
+# read-back and the MCP mount against it. A 1.19.6 or a 2.x release may rework the
+# plugin API, the server API or the config file layout, and none of that has been
+# measured here -- so until those measurements are re-run, the launch refuses it.
+# Widen it only after re-measuring. It lives beside the probe's argv -- the only
+# code that reads it -- the way the pi harness keeps its minimum version in its
+# own module.
+_OPENCODE_TESTED_VERSION: tuple[int, int, int] = (1, 19, 5)
+_OPENCODE_TESTED_VERSION_TEXT = ".".join(str(part) for part in _OPENCODE_TESTED_VERSION)
 # The version child is bounded like the read-back: a binary that hangs on the
 # flag must refuse the launch, not stall the gateway loop that awaited it.
 _OPENCODE_VERSION_TIMEOUT_S = 15.0
@@ -101,30 +102,30 @@ def _opencode_readback_remedy() -> str:
 
 
 def _opencode_version_remedy() -> str:
-    """What an operator does when the resolved binary is not the tested major."""
+    """What an operator does when the resolved binary is not the tested release."""
     return (
-        f"Install a tested release with '{OPENCODE_INSTALL_COMMAND}', or set "
-        f"{_OPENCODE_LAUNCH.bin_env_var} to a binary of major "
-        f"{_OPENCODE_TESTED_MAJOR}."
+        f"Install the tested release with '{OPENCODE_INSTALL_COMMAND}', or set "
+        f"{_OPENCODE_LAUNCH.bin_env_var} to a binary at "
+        f"{_OPENCODE_TESTED_VERSION_TEXT}."
     )
 
 
-#: The first dotted version pair in a harness banner. The banner's exact wording is
+#: The first three-part version in a harness banner. The banner's exact wording is
 #: the binary's to choose, so the scan looks for the number rather than anchoring the
-#: line: "1.19.0", "opencode 2.0.27" and a build-prefixed string all carry the major
-#: this gate reads.
-_VERSION_SHAPE = re.compile(r"(?:^|\D)(\d+)\.\d+")
+#: line: "1.19.5", "opencode 1.19.5" and a build-prefixed string all carry the
+#: release this gate reads.
+_VERSION_SHAPE = re.compile(r"(?:^|\D)(\d+)\.(\d+)\.(\d+)")
 
 
-def _parse_opencode_major(version_output: str) -> int | None:
-    """The major version *version_output* carries, or ``None`` when none is readable.
+def _parse_opencode_version(version_output: str) -> tuple[int, int, int] | None:
+    """The version *version_output* carries, or ``None`` when none is readable.
 
-    An empty output, a banner with no dotted pair, and any other unreadable shape
-    answer ``None`` -- the caller treats unreadable as outside the tested range, so
-    the gate's failure direction is closed.
+    An empty output, a banner with no three-part version, and any other unreadable
+    shape answer ``None`` -- the caller treats unreadable as outside the tested
+    range, so the gate's failure direction is closed.
     """
     match = _VERSION_SHAPE.search(version_output or "")
-    return int(match.group(1)) if match else None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else None
 
 
 #: Deliberately NO cache on this answer. The binary resolution next door caches per
@@ -136,8 +137,10 @@ def _parse_opencode_major(version_output: str) -> int | None:
 #: always current.
 
 
-def _opencode_reported_major(session: ProcessSession, argv: list[str]) -> int | None:
-    """Run the sandbox-wrapped version child and answer the major it reports.
+def _opencode_reported_version(
+    session: ProcessSession, argv: list[str]
+) -> tuple[int, int, int] | None:
+    """Run the sandbox-wrapped version child and answer the release it reports.
 
     Blocking -- it spawns a short-lived child -- so callers run it off the loop,
     like the routing read-back. The environment is built the same way the
@@ -177,7 +180,7 @@ def _opencode_reported_major(session: ProcessSession, argv: list[str]) -> int | 
         return None
     if completed.returncode != 0:
         return None
-    return _parse_opencode_major(completed.stdout)
+    return _parse_opencode_version(completed.stdout)
 
 
 async def _opencode_version_refusal(
@@ -188,23 +191,23 @@ async def _opencode_version_refusal(
     hidden: tuple[str, ...],
     expose: tuple[str, ...],
 ) -> tuple[str, str]:
-    """Refuse a resolved binary whose major is not the one this launch was measured
+    """Refuse a resolved binary whose release is not the one this launch was measured
     against.
 
     Everything the launch does below this check -- the read-back that establishes
     the asking posture, and the session spawn that trusts it -- is measured only
-    against ``_OPENCODE_TESTED_MAJOR``. A PATH refresh onto another line would
+    against ``_OPENCODE_TESTED_VERSION``. A PATH refresh onto another release would
     otherwise move the session onto it silently: the read-back may parse shapes it
     was never tested against or refuse a session that is fine, and neither failure
     names the upgrade that caused it.
 
-    Returns ``("", "")`` when the binary is in range, else the reason and the
-    remedy. Every launch probes fresh -- see the no-cache note at
-    ``_opencode_reported_major`` -- and the probe child is wrapped in the same
+    Returns ``("", "")`` when the binary is at the tested release, else the reason
+    and the remedy. Every launch probes fresh -- see the no-cache note at
+    ``_opencode_reported_version`` -- and the probe child is wrapped in the same
     sandbox with the same mask as the read-back -- same binary, same trust level --
     and runs off the loop like it.
     """
-    tested = _OPENCODE_TESTED_MAJOR
+    tested = _OPENCODE_TESTED_VERSION
     version_argv, cleanup = await wrap_argv_async(
         [opencode_bin, *_OPENCODE_VERSION_ARGS],
         mode=sandbox_mode,
@@ -214,25 +217,26 @@ async def _opencode_version_refusal(
         _prepare=wrap_argv,
     )
     try:
-        major = await asyncio.to_thread(_opencode_reported_major, session, version_argv)
+        reported = await asyncio.to_thread(_opencode_reported_version, session, version_argv)
     finally:
         # The same contract as the read-back's artifact: wrap_argv leaves a
         # launcher file the child consumes at exec, reclaimed as soon as the
         # child has exited -- refusal paths included.
         if cleanup:
             await asyncio.to_thread(launch_mod._unlink_readback_launcher, cleanup)
-    if major == tested:
+    if reported == tested:
         return "", ""
-    if major is None:
+    if reported is None:
         return (
             "the resolved binary did not report a readable version, so the launch "
-            f"cannot establish it is the tested major {tested}",
+            f"cannot establish it is the tested release {_OPENCODE_TESTED_VERSION_TEXT}",
             _opencode_version_remedy(),
         )
+    reported_text = ".".join(str(part) for part in reported)
     return (
-        f"the resolved binary reports major {major}, and this launch has only been "
-        f"tested against major {tested}: the permission read-back and the ACP spawn "
-        "have never run against that line",
+        f"the resolved binary reports version {reported_text}, and this launch has "
+        f"only been tested against {_OPENCODE_TESTED_VERSION_TEXT}: the permission "
+        "read-back and the ACP spawn have never run against that release",
         _opencode_version_remedy(),
     )
 
@@ -890,7 +894,7 @@ class OpencodeLaunch(ProcessAdapter):
         )
         expose = acp_tool_gate.adapter_expose_files(self.backend, hidden)
         # The version gate, BEFORE the read-back: every child below this line is
-        # this harness's own binary doing work only its tested major's shapes are
+        # this harness's own binary doing work only its tested release's shapes are
         # measured against. A binary outside that line is refused here, so the
         # read-back it was never measured against never runs.
         version_issue, version_remedy = await _opencode_version_refusal(
@@ -906,7 +910,7 @@ class OpencodeLaunch(ProcessAdapter):
             # "tool calls would not reach Kiro Crew's security gate", which this
             # gate has not measured -- no routing read-back ran, only
             # ``--version``. The refusal says what happened: the binary is
-            # outside the tested major, and everything below was never measured
+            # outside the tested release, and everything below was never measured
             # against it. Same type, so ``ensure_ready`` still catches it and the
             # failed spawn's cleanup runs the same way with it.
             raise AcpToolGateUnroutable(

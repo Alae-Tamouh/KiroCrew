@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import subprocess
 import threading
 
 import pytest
@@ -196,6 +197,13 @@ class TestRoutingSeed:
         seed = json.loads(self._seed())
         assert seed["model"] == "ollama/qwen3:8b"
         assert seed["permission"] == "ask", "Crew's permission setting must win the merge"
+
+    def test_native_worker_excludes_ride_the_tools_map(self):
+        seed = json.loads(
+            opencode_mod._opencode_routing_config(ACP_BACKEND_OPENCODE, (), ("bash", "edit"))
+        )
+        assert seed["permission"] == "ask"
+        assert seed["tools"] == {"bash": False, "edit": False}
 
     @pytest.mark.parametrize("ambient", ["not json at all", '"a string"', "[1, 2]"])
     def test_an_unusable_ambient_value_still_yields_the_seed(self, monkeypatch, ambient):
@@ -403,6 +411,45 @@ class TestTheReadBackReportsFailureRatherThanAssuming:
         issue, remedy = self._verify(self._client(tmp_path), _ARGV, "{}")
         assert "parsed" in issue
         assert "debug config" in remedy
+
+    def test_a_native_worker_exclusion_must_survive_the_read_back(self, tmp_path, monkeypatch):
+        class _Completed:
+            returncode = 0
+            stdout = '{"permission": {"*": "ask"}}'
+
+        monkeypatch.setattr(opencode_mod.subprocess_mod, "run", lambda *_a, **_kw: _Completed())
+        seed = json.dumps({"permission": {"*": "ask"}, "tools": {"bash": False}})
+        issue, _remedy = self._verify(self._client(tmp_path), _ARGV, seed)
+        assert "native tool" in issue
+
+    def test_a_document_larger_than_a_pipe_is_read_from_a_file(self, tmp_path, monkeypatch):
+        """A valid document past 128 KiB must not be truncated by a pipe.
+
+        opencode 1.19.5 truncates a piped ``debug config`` at exactly 128 KiB.
+        The resolved config legitimately exceeds that once its provider/model
+        catalog is included, so the read-back captures stdout in a file and
+        reads it back whole.
+        """
+        payload = json.dumps({"permission": {"*": "ask"}, "padding": "x" * (140 * 1024)})
+        seen: dict = {}
+
+        class _Completed:
+            returncode = 0
+            stdout = None
+            stderr = ""
+
+        def _fake_run(_argv, **kwargs):
+            seen.update(kwargs)
+            out = kwargs["stdout"]
+            out.write(payload.encode("utf-8"))
+            out.flush()
+            return _Completed()
+
+        monkeypatch.setattr(opencode_mod.subprocess_mod, "run", _fake_run)
+        assert self._verify(self._client(tmp_path), _ARGV, "{}") == ("", "")
+        assert "capture_output" not in seen
+        assert seen["stdout"] is not None
+        assert seen["stdout"] is not subprocess.PIPE
 
     def test_a_banner_before_the_document_is_tolerated(self, tmp_path, monkeypatch):
         """The harness prints a banner first, so the object is found, not assumed."""
@@ -634,7 +681,7 @@ class _OpencodeLaunchRig:
     CLEANUP_VERSION = "/opt/run/kirocrew_sandbox_version"
     MODE = "standard"
 
-    def __init__(self, monkeypatch, tmp_path, *, routing=("", ""), probe_stdout="1.19.0"):
+    def __init__(self, monkeypatch, tmp_path, *, routing=("", ""), probe_stdout="1.19.5"):
         self.events: list[tuple] = []
         self.loop_thread: int | None = None
         self.plan = None
@@ -1023,11 +1070,12 @@ def test_the_backend_declares_the_verified_mechanism() -> None:
 # ── The version gate ─────────────────────────────────────────────────────────
 
 
-def test_the_harness_names_the_tested_major() -> None:
+def test_the_harness_names_the_tested_release() -> None:
     """The pin is a fact of this harness's own module, beside the probe that reads
-    it -- the install advice in the launch table pins the same line."""
-    assert opencode_mod._OPENCODE_TESTED_MAJOR == 1
-    assert "opencode-ai@1" in launch_for(ACP_BACKEND_OPENCODE).install_command
+    it -- the install advice in the launch table pins the same release."""
+    assert opencode_mod._OPENCODE_TESTED_VERSION == (1, 19, 5)
+    assert opencode_mod._OPENCODE_TESTED_VERSION_TEXT == "1.19.5"
+    assert "opencode-ai@1.19.5" in launch_for(ACP_BACKEND_OPENCODE).install_command
 
 
 def _version_gate(monkeypatch, *, stdout="", returncode=0, raise_exc=None) -> dict:
@@ -1066,10 +1114,10 @@ def _version_refusal(client: AcpClient, binary: str) -> tuple[str, str]:
     return asyncio.run(_go())
 
 
-def test_a_tested_major_passes(tmp_path, monkeypatch) -> None:
-    """In range: no refusal, and the child the gate started is the wrapped
+def test_the_tested_release_passes(tmp_path, monkeypatch) -> None:
+    """At the pin: no refusal, and the child the gate started is the wrapped
     ``--version`` of the resolved binary."""
-    calls = _version_gate(monkeypatch, stdout="1.19.0")
+    calls = _version_gate(monkeypatch, stdout="1.19.5")
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
     assert calls["argv"] == ["/opt/run/launcher", "/opt/bin/opencode", "--version"]
@@ -1078,26 +1126,26 @@ def test_a_tested_major_passes(tmp_path, monkeypatch) -> None:
 def test_the_gate_is_probed_fresh_on_every_launch(tmp_path, monkeypatch) -> None:
     """No cache sits in front of this answer, on purpose.
 
-    A verdict keyed on the resolved path keeps reporting the OLD major after an
+    A verdict keyed on the resolved path keeps reporting the OLD release after an
     in-place upgrade puts a new binary behind the same path -- the gate would then
     wave through the very launch it exists to refuse. So every launch probes
     again, the same order of cost as the read-back child it precedes.
     """
-    calls = _version_gate(monkeypatch, stdout="1.19.0")
+    calls = _version_gate(monkeypatch, stdout="1.19.5")
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
     assert _version_refusal(client, "/opt/bin/opencode") == ("", "")
     assert calls["probes"] == 2, "a second launch read a stale answer instead of probing"
 
 
-def test_an_untested_newer_major_refuses_and_names_both_lines(tmp_path, monkeypatch) -> None:
-    """A PATH refresh onto the untested line is the exact hazard: the refusal says
-    which major moved, and the remedy is a tested release or the override."""
+def test_an_untested_newer_release_refuses_and_names_both_versions(tmp_path, monkeypatch) -> None:
+    """A PATH refresh onto an untested release is the exact hazard: the refusal says
+    which version moved, and the remedy is a tested release or the override."""
     calls = _version_gate(monkeypatch, stdout="opencode 2.0.27")
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     issue, remedy = _version_refusal(client, "/opt/bin/opencode")
-    assert "major 2" in issue
-    assert "major 1" in issue
+    assert "version 2.0.27" in issue
+    assert "1.19.5" in issue
     assert OPENCODE_INSTALL_COMMAND in remedy
     assert _ENV_BIN in remedy
     # And the answer is re-read next launch, so a retry wears nothing down.
@@ -1105,12 +1153,21 @@ def test_an_untested_newer_major_refuses_and_names_both_lines(tmp_path, monkeypa
     assert calls["probes"] == 2
 
 
-def test_an_older_major_refuses_too(tmp_path, monkeypatch) -> None:
-    """The pin is one measured line, not a ceiling: 0.x is as unmeasured as 2.x."""
+def test_a_newer_patch_refuses_at_the_exact_pin(tmp_path, monkeypatch) -> None:
+    """The pin is one release, not a minimum: 1.19.6 is unmeasured here."""
+    _version_gate(monkeypatch, stdout="1.19.6")
+    client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
+    issue, _remedy = _version_refusal(client, "/opt/bin/opencode")
+    assert "version 1.19.6" in issue
+    assert "1.19.5" in issue
+
+
+def test_an_older_release_refuses_too(tmp_path, monkeypatch) -> None:
+    """The pin is one measured release, not a floor: 0.x is as unmeasured as 2.x."""
     _version_gate(monkeypatch, stdout="0.104.0")
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     issue, _remedy = _version_refusal(client, "/opt/bin/opencode")
-    assert "major 0" in issue
+    assert "version 0.104.0" in issue
 
 
 @pytest.mark.parametrize(
@@ -1118,19 +1175,20 @@ def test_an_older_major_refuses_too(tmp_path, monkeypatch) -> None:
     [
         ({"stdout": ""},),
         ({"stdout": "opencode"},),
-        ({"returncode": 1, "stdout": "1.19.0"},),
+        ({"returncode": 1, "stdout": "1.19.5"},),
         ({"raise_exc": FileNotFoundError("no such binary")},),
     ],
     ids=["empty-output", "no-dotted-pair", "non-zero-exit", "child-would-not-run"],
 )
 def test_an_unreadable_answer_refuses_closed(tmp_path, monkeypatch, gate_kwargs) -> None:
     """A version the gate cannot read is not a pass. Everything the launch does
-    below the gate is measured against the tested major, so an unreadable answer
+    below the gate is measured against the tested release, so an unreadable answer
     establishes nothing and the direction that cannot silently downgrade is out."""
     calls = _version_gate(monkeypatch, **gate_kwargs)
     client = AcpClient(work_dir=tmp_path, acp_backend=ACP_BACKEND_OPENCODE)
     issue, remedy = _version_refusal(client, "/opt/bin/opencode")
     assert "did not report a readable version" in issue
+    assert "1.19.5" in issue
     assert OPENCODE_INSTALL_COMMAND in remedy
     assert calls["probes"] == 1
 
@@ -1143,7 +1201,7 @@ def test_the_version_child_is_wrapped_like_the_read_back(monkeypatch, tmp_path) 
     and a gate that unwrapped one child to add another would trade a checked fact
     for an unchecked one.
     """
-    rig = _OpencodeLaunchRig(monkeypatch, tmp_path, probe_stdout="1.19.0")
+    rig = _OpencodeLaunchRig(monkeypatch, tmp_path, probe_stdout="1.19.5")
     rig.run()
     wrapped, kwargs = rig.args_of("wrap_version")
     expose = acp_tool_gate.adapter_expose_files(ACP_BACKEND_OPENCODE, rig.HIDDEN)
@@ -1162,7 +1220,7 @@ def test_the_version_gate_runs_between_the_preflight_and_the_read_back(
     """Order carries the properties: the mask exists before the probe starts, the
     probe's launcher artifact is reclaimed before the read-back starts, and the
     session's MCP warm precedes every child of this harness."""
-    rig = _OpencodeLaunchRig(monkeypatch, tmp_path, probe_stdout="1.19.0")
+    rig = _OpencodeLaunchRig(monkeypatch, tmp_path, probe_stdout="1.19.5")
     rig.run()
     names = rig.names()
     assert names.index("session_mcp") < names.index("wrap_version")
@@ -1171,14 +1229,14 @@ def test_the_version_gate_runs_between_the_preflight_and_the_read_back(
     assert names.index("wrap_version") < names.index("wrap_readback")
 
 
-def test_an_out_of_range_major_refuses_before_the_read_back(monkeypatch, tmp_path) -> None:
+def test_an_out_of_range_release_refuses_before_the_read_back(monkeypatch, tmp_path) -> None:
     """A binary outside the tested line must not reach the read-back whose parsed
     shapes were never measured against it. The refusal names the line that moved,
     the probe's launcher artifact is reclaimed, and no read-back child starts."""
     rig = _OpencodeLaunchRig(monkeypatch, tmp_path, probe_stdout="opencode 2.0.27")
     with pytest.raises(acp_client.AcpToolGateUnroutable) as excinfo:
         rig.run()
-    assert "major 2" in str(excinfo.value)
+    assert "version 2.0.27" in str(excinfo.value)
     assert rig.plan is None
     names = rig.names()
     assert "wrap_readback" not in names, "the read-back child started behind a refused gate"

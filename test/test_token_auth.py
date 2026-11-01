@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import string
 import threading
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -1110,6 +1111,71 @@ async def test_internal_path_does_not_match_sibling_prefix() -> None:
     req = _make_request(path="/api/spawnfoo", headers={"X-Internal-Secret": secret})
     resp = await mw(req, _ok_handler)
     assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_session_token_grants_internal_for_core_surfaces(
+    monkeypatch,
+) -> None:
+    """A signed session token stands in for the gateway secret on MCP surfaces.
+
+    The foreign-harness sandbox withholds the gateway secret; the per-session
+    token Crew mounts on the MCP element attests the session. Core/guide routes
+    accept a normal chat, but session control and crewmate self-editing remain
+    member-only. A non-MCP path or a token naming another key is refused.
+    """
+    from kiro_crew.dashboard import token_auth_callers as callers
+
+    member = "dashboard:member-atlas"
+    normal = "dashboard:chat-1"
+    monkeypatch.setattr(
+        callers, "verify_session_token", lambda token: token if token in (member, normal) else ""
+    )
+    monkeypatch.setattr(
+        callers, "_sel_fn", lambda: SimpleNamespace(log_api_access=lambda **_kw: None)
+    )
+    monkeypatch.setattr(callers, "_log_auth", lambda *_a, **_kw: None)
+
+    async def granted(path: str, headers: dict[str, str]) -> bool:
+        req = _make_request(path=path, headers=headers)
+        return await callers._session_token_internal_grant(req, req.path)
+
+    assert await granted(
+        "/api/session-control/create",
+        {"X-Session-Key": member, "X-Session-Token": member},
+    )
+    assert await granted(
+        "/api/guide/agent/start",
+        {"X-Session-Key": member, "X-Session-Token": member},
+    )
+    assert await granted(
+        "/api/session-tool-policy",
+        {"X-Session-Key": member, "X-Session-Token": member},
+    )
+    assert await granted(
+        "/api/session-tool-policy",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
+    assert await granted(
+        "/api/guide/agent/start",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
+    assert not await granted(
+        "/api/session-control/create",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
+    assert not await granted(
+        "/api/member/self/update",
+        {"X-Session-Key": normal, "X-Session-Token": normal},
+    )
+    assert not await granted(
+        "/api/chat",
+        {"X-Session-Key": member, "X-Session-Token": member},
+    )
+    assert not await granted(
+        "/api/session-control/create",
+        {"X-Session-Key": member, "X-Session-Token": "wrong"},
+    )
 
 
 @pytest.mark.asyncio

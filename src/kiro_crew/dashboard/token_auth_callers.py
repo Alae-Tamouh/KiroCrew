@@ -32,6 +32,92 @@ from kiro_crew.session_token_sig import verify_session_token
 logger = logging.getLogger("kiro_crew.dashboard.token_auth")
 
 
+#: MCP-only paths a signed session token may authenticate as internal.
+#:
+#: A foreign-harness MCP child cannot read ``.local_secret`` or ``run`` (the
+#: gateway credential and its per-listener secret) inside the sandbox. It does
+#: carry the per-session token minted for its ACP session, and that token is
+#: exactly the loopback-TCP attestation the gateway already verifies for peer
+#: identity. Accepting it here keeps Crew's own control surfaces reachable
+#: without putting the master secret in an agent's environment or re-opening the
+#: sandbox mask.
+#:
+#: The member-only split is the authorization boundary: a normal chat may use
+#: its own core/guide surfaces, but it may NOT drive another session or edit a
+#: crewmate record. Those two prefixes stay behind ``member-*``.
+_MEMBER_ONLY_SESSION_TOKEN_PREFIXES: tuple[str, ...] = (
+    "/api/session-control",
+    "/api/member/self",
+)
+
+_ANY_SESSION_TOKEN_PREFIXES: tuple[str, ...] = (
+    "/api/guide/agent",
+    "/api/cards/agent",
+    "/api/agent-panel",
+    # The MCP-only crew surfaces core/cron servers call. All are session-scoped
+    # by X-Session-Key; host-wide debug/computer-use and secret-egress stay out.
+    "/api/session-tool-policy",
+    "/api/session-directive",
+    "/api/session-keepalive",
+    "/api/search/segment",
+    "/api/agent-ask",
+    "/api/crew-sessions",
+    "/api/session-ledger",
+    "/api/work-ledger",
+    "/api/crew-log",
+    "/api/sessions/summarize",
+    "/api/notifications/agent",
+    "/api/knowledge/agent-document",
+    "/api/mcp/servers",
+    "/api/autonudge/session-monitor",
+)
+
+
+def _path_matches(path: str, prefixes: tuple[str, ...]) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)
+
+
+async def _session_token_internal_grant(request: web.Request, path: str) -> bool:
+    """Admit an MCP child by its signed session token, else False.
+
+    The token must verify under the SEL trust root AND name the same session the
+    request declares in ``X-Session-Key``. Both facts come from the per-session
+    environment Crew already places on the MCP element, so this grants no session
+    beyond the one the child was mounted into. Normal chats qualify on the
+    core/guide surfaces; session control and crewmate self-editing remain
+    ``member-*`` only.
+    """
+    member_only = _path_matches(path, _MEMBER_ONLY_SESSION_TOKEN_PREFIXES)
+    if not member_only and not _path_matches(path, _ANY_SESSION_TOKEN_PREFIXES):
+        return False
+    session_key = request.headers.get("X-Session-Key", "")
+    token = request.headers.get("X-Session-Token", "")
+    if not session_key or not token:
+        return False
+    if member_only:
+        from kiro_crew.members_parts.member_sessions import is_member_session_key
+
+        if not is_member_session_key(session_key):
+            return False
+    attested = await asyncio.get_running_loop().run_in_executor(
+        subprocess_executor(), partial(verify_session_token, token)
+    )
+    if attested != session_key:
+        return False
+    request["internal_auth"] = True
+    _sel_fn().log_api_access(
+        caller=session_key,
+        forwarded=is_proxied_request(request),
+        operation="internal_auth",
+        outcome="granted",
+        source="token_auth",
+        resources=path,
+        error="session token",
+    )
+    _log_auth(request, "internal", "granted", "session token")
+    return True
+
+
 def _unix_request_socket(request: web.Request) -> Any:
     """Return the request's underlying socket iff it is ``AF_UNIX``.
 

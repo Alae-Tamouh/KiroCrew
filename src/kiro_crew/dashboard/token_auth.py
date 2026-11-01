@@ -71,6 +71,7 @@ from kiro_crew.dashboard.token_auth_app_scope import _enforce_app_scope, _prime_
 from kiro_crew.dashboard.token_auth_callers import (
     _derive_internal_caller_app,
     _internal_caller_record_missing,
+    _session_token_internal_grant,
     _unix_request_socket,
     _verify_unix_peer,
 )
@@ -540,8 +541,21 @@ def token_auth_middleware(
                 if _peer_deny is not None:
                     return _peer_deny
             _has_secret_header = "X-Internal-Secret" in request.headers
+            _provided_secret = request.headers.get("X-Internal-Secret", "")
+            if not _provided_secret:
+                # A foreign-harness MCP child cannot read the gateway secret:
+                # the sandbox withholds ``.local_secret`` and ``run``. It does
+                # carry the signed per-session token for the member session it
+                # was mounted into, and that is the loopback-TCP attestation the
+                # gateway already verifies elsewhere. Let it authenticate only
+                # the MCP-only surfaces in ``_MEMBER_TOKEN_INTERNAL_PREFIXES``,
+                # and only when the token names the member key it declares.
+                if await _session_token_internal_grant(request, path):
+                    await publish_actor(
+                        request, trust=tailnet_trust, serve_peer=None, internal=True
+                    )
+                    return await handler(request)  # type: ignore[operator]
             if _has_secret_header:
-                _provided_secret = request.headers["X-Internal-Secret"]
                 # Secret header present — validate it strictly
                 if not internal_secret:
                     _sel = _sel_fn()

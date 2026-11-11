@@ -39,15 +39,41 @@ class TestTheInstallerWritesTheDefaultTemplateUnderItsOwnName:
         assert MATE_CONDUCTOR_AGENT_FILENAME == "kirocrew-mate-conductor.json"
         assert MATE_CONDUCTOR_AGENT_FILENAME in OWNED_KIRO_AGENT_FILES
 
-    def test_beyond_name_and_description_it_is_the_default_templates_shape(
+    def test_beyond_name_description_and_platform_dashboard_it_is_the_default_shape(
         self, installed, monkeypatch, tmp_path
     ):
-        """Every other field matches ``build_agent_config()`` exactly."""
+        """Every field outside the conductor's own additions matches ``build_agent_config()``."""
         template = agent.build_agent_config()
         for key, value in template.items():
-            if key in ("name", "description", "excludedTools"):
+            if key in (
+                "name",
+                "description",
+                "excludedTools",
+                "mcpServers",
+                "tools",
+                "allowedTools",
+            ):
                 continue
             assert installed.get(key) == value, key
+
+    def test_it_can_manage_its_own_dashboard(self, installed):
+        """The conductor owns its crewmate's tab: the page verbs are ``kirocrew-panel``,
+        the session/folder verbs are ``kirocrew-dashboard``, and both must be mounted
+        with their reviewed grants so save/preview/apply/rollback do not prompt."""
+        assert "kirocrew-dashboard" in installed["mcpServers"]
+        assert "kirocrew-panel" in installed["mcpServers"]
+        assert "@kirocrew-dashboard" in installed["tools"]
+        assert "@kirocrew-panel" in installed["tools"]
+        for tool in (
+            "dashboard_save",
+            "dashboard_preview",
+            "dashboard_apply",
+            "dashboard_rollback",
+            "dashboard_snapshot",
+        ):
+            assert f"@kirocrew-panel/{tool}" in installed["allowedTools"]
+        assert "@kirocrew-dashboard/session_create" in installed["allowedTools"]
+        assert "@kirocrew-dashboard/session_send" in installed["allowedTools"]
 
     def test_it_keeps_the_default_templates_built_in_tools(self, installed):
         """Only sub-agent spawning is taken away: the shell, the file writer and

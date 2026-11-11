@@ -170,6 +170,31 @@ def _install_mate_conductor_agent() -> None:
         listed = config.get(key)
         if isinstance(listed, list):
             config[key] = [t for t in listed if _kept(t)]
+    # The conductor runs the crewmate's own chat, so it owns that crewmate's
+    # Dashboard tab. The page verbs live on ``kirocrew-panel`` (the session
+    # and folder verbs on ``kirocrew-dashboard``); neither is auto-emitted by
+    # ``build_agent_config``, and without them the crewmate cannot save,
+    # preview, apply or roll back its own page. They are platform servers, so
+    # the user-server filter above must not drop them.
+    tools = config.get("tools")
+    if not isinstance(tools, list):
+        tools = []
+    for name in ("kirocrew-dashboard", "kirocrew-panel"):
+        entry = agent_mod.managed_mcp_spec_entry(name, include_opt_in=True)
+        if entry is None:
+            continue
+        config["mcpServers"][name] = entry
+        ref = f"@{name}"
+        if ref not in tools:
+            tools.append(ref)
+    config["tools"] = tools
+    grants = config.get("allowedTools")
+    if not isinstance(grants, list):
+        grants = []
+    for ref in (*agent_mod._MEMBER_DASHBOARD_GRANTS, *agent_mod._MEMBER_PANEL_GRANTS):
+        if ref not in grants:
+            grants.append(ref)
+    config["allowedTools"] = grants
     _exclude(config, MATE_CONDUCTOR_EXCLUDED_TOOLS)
     _write_mate_service_spec(
         _MATE_CONDUCTOR_AGENT_FILENAME, config, "_install_mate_conductor_agent"

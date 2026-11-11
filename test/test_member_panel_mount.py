@@ -37,6 +37,7 @@ from kiro_crew.acp.types import (
     ACP_BACKEND_KIRO,
     ACP_BACKEND_OPENCODE,
 )
+from kiro_crew.mcp_gateway import STUB_MODULE
 from kiro_crew.mcp_gateway.claim import STUB_SESSION_TOKEN_ENV
 from kiro_crew.members import (
     MEMBER_DISPATCH_SERVER,
@@ -394,6 +395,20 @@ class TestClaudePanelAppend:
         matches = [e for e in out if e["name"] == MEMBER_PANEL_SERVER]
         assert len(matches) == 1
         assert matches[0]["command"] != "old"
+
+    def test_a_broker_stub_is_not_replaced(self, panel_granted):
+        """The gateway's session-bound stub is the only working form inside the
+        sandbox; replacing it with the raw member launch would make the panel
+        fail closed on the credential mask."""
+        stub = _ClientStub()
+        broker = {
+            "name": MEMBER_PANEL_SERVER,
+            "command": "python",
+            "args": ["-m", STUB_MODULE, "--server", MEMBER_PANEL_SERVER],
+            "env": [{"name": STUB_SESSION_TOKEN_ENV, "value": stub._stub_session_token}],
+        }
+        out = AcpClient._append_member_panel_server(stub, [*_base_servers(), broker])
+        assert out == [*_base_servers(), broker]
 
     @pytest.mark.parametrize(
         "backend",

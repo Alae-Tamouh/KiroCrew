@@ -57,6 +57,7 @@ from kiro_crew.acp.types import (
     overlay_project_scope,
 )
 from kiro_crew.agent_discovery import _read_agent_spec
+from kiro_crew.mcp_gateway import STUB_MODULE
 from kiro_crew.mcp_gateway.session_servers import (
     attach_stub_session_token,
     injection_server_names,
@@ -74,6 +75,19 @@ logger = logging.getLogger("kiro_crew.acp.client")
 #: The allowlist of a member spec that was not read: it references nothing, so a
 #: pooled stub is never mounted on the strength of a spec nobody read.
 _GRANTS_NOTHING = ToolsAllowlist(applies=True, grant_all=False, refs=frozenset())
+
+
+def _is_broker_stub_entry(entry: dict[str, Any]) -> bool:
+    """Whether *entry* is the gateway's broker stub, not a spec-shaped launch.
+
+    A member mount must not replace this element with its own raw command: the
+    broker stub is the only form of an identity-bound managed server that runs
+    outside the agent sandbox with a session credential. The raw command it would
+    otherwise append is launched inside the sandbox, where the credential/policy
+    mask makes it fail closed.
+    """
+    args = entry.get("args")
+    return isinstance(args, list) and any(arg == STUB_MODULE for arg in args)
 
 
 def spec_is_toolless(spec: object) -> bool:
@@ -607,6 +621,8 @@ def _append_member_dispatch_server(
         )
         return servers
     self._member_dispatch_mounted = True
+    if any(e.get("name") == entry["name"] and _is_broker_stub_entry(e) for e in servers):
+        return servers
     return [e for e in servers if e.get("name") != entry["name"]] + [entry]
 
 
@@ -724,6 +740,8 @@ def _append_member_panel_server(
             "a panel this session",
             self._session_key,
         )
+        return servers
+    if any(e.get("name") == entry["name"] and _is_broker_stub_entry(e) for e in servers):
         return servers
     return [e for e in servers if e.get("name") != entry["name"]] + [entry]
 

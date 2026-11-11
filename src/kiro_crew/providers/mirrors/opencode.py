@@ -86,6 +86,7 @@ from kiro_crew.providers.mirrors.base import (
 )
 from kiro_crew.providers.mirrors.identity import (
     control_plane_identity_env,
+    identity_bound_crew_servers,
     with_env,
     withheld_servers,
 )
@@ -122,6 +123,15 @@ _OPENCODE_IDENTITY_SERVERS = frozenset(
 #: dashboard-facing servers above plus the two control-plane entries
 #: ``session_mcp_servers`` already re-derives.
 _OPENCODE_IDENTITY_NAMES = frozenset(CONTROL_PLANE_SERVERS) | _OPENCODE_IDENTITY_SERVERS
+
+#: Identity-bound managed servers whose SESSION-BOUND BROKER STUB may be mounted.
+#: The member control and panel servers are here but not in
+#: ``_OPENCODE_IDENTITY_SERVERS``: their spec-shaped entry is never mounted, so
+#: the member mounts (and now the genuine stub) are the only path. ``computer``,
+#: ``secrets`` and ``debug`` stay out: their tools are not member-scoped.
+_OPENCODE_STUB_ADMISSIBLE_IDENTITY = _OPENCODE_IDENTITY_SERVERS | frozenset(
+    {"kirocrew-dashboard", "kirocrew-panel"}
+)
 
 
 def _work_ledger_server() -> str:
@@ -167,6 +177,40 @@ def _stub_registered_servers(args: Any) -> list[str] | None:
     return servers
 
 
+def is_session_bound_broker_stub(
+    stub: Mapping[str, Any], session_token: str, server: str
+) -> bool:
+    """Whether *stub* is the gateway's broker stub for *server* and THIS session.
+
+    The shape every identity-bound managed server needs when the spec-shaped
+    element cannot carry the session's identity: a stdio element whose argv runs
+    the broker stub module and registers under exactly one ``--server`` naming
+    *server*, with exactly one env pair, ``STUB_SESSION_TOKEN_ENV`` equal to
+    *session_token*. Fails closed on anything unreadable.
+    """
+    if not session_token or not server:
+        return False
+    if stub.get("name") != server:
+        return False
+    if str(stub.get("type") or _STDIO_TAG) != _STDIO_TAG:
+        return False
+    command = stub.get("command")
+    if not isinstance(command, str) or not command:
+        return False
+    if _stub_registered_servers(stub.get("args")) != [server]:
+        return False
+    env = stub.get("env")
+    if not isinstance(env, list) or len(env) != 1:
+        return False
+    pair = env[0]
+    return (
+        isinstance(pair, Mapping)
+        and set(pair) == {"name", "value"}
+        and pair.get("name") == STUB_SESSION_TOKEN_ENV
+        and pair.get("value") == session_token
+    )
+
+
 def is_session_bound_work_ledger_stub(stub: Mapping[str, Any], session_token: str) -> bool:
     """Whether *stub* is the gateway's work-ledger broker stub for THIS session.
 
@@ -187,28 +231,7 @@ def is_session_bound_work_ledger_stub(stub: Mapping[str, Any], session_token: st
     Fails closed: anything unreadable answers ``False``. Restrictions, ``disabled``
     and the ``tools`` allowlist are not decided here; the caller still applies them.
     """
-    if not session_token:
-        return False
-    server = _work_ledger_server()
-    if stub.get("name") != server:
-        return False
-    if str(stub.get("type") or _STDIO_TAG) != _STDIO_TAG:
-        return False
-    command = stub.get("command")
-    if not isinstance(command, str) or not command:
-        return False
-    if _stub_registered_servers(stub.get("args")) != [server]:
-        return False
-    env = stub.get("env")
-    if not isinstance(env, list) or len(env) != 1:
-        return False
-    pair = env[0]
-    return (
-        isinstance(pair, Mapping)
-        and set(pair) == {"name", "value"}
-        and pair.get("name") == STUB_SESSION_TOKEN_ENV
-        and pair.get("value") == session_token
-    )
+    return is_session_bound_broker_stub(stub, session_token, _work_ledger_server())
 
 
 def without_stdio_tag(element: dict[str, Any]) -> dict[str, Any]:
@@ -440,6 +463,7 @@ def place_single_binary_array(
     identity_mounted: Collection[str] = (),
     identity_names: Collection[str] = CONTROL_PLANE_SERVERS,
     admit_work_ledger_stub: bool = False,
+    admit_identity_stubs: bool = False,
 ) -> list[dict[str, Any]]:
     """The ``mcpServers`` array for a single-binary harness, both halves of it.
 
@@ -467,6 +491,12 @@ def place_single_binary_array(
     server is not withheld for an unhonoured restriction. It still passes the
     ``tools`` allowlist, which also refuses a server switched off whole. A
     spec-described work-ledger entry stays withheld and is never handed a credential.
+
+    With *admit_identity_stubs*, the same exception covers every identity-bound
+    managed server (:func:`identity_bound_crew_servers`), including the dashboard
+    session-control and panel servers. Their only working form on this transport is
+    the gateway's session-bound stub; the spec-shaped entry cannot carry the
+    session's identity.
     """
     withheld = (
         (withheld_servers(frozenset()) - frozenset(identity_mounted))
@@ -520,12 +550,37 @@ def place_single_binary_array(
         if not isinstance(stub, Mapping):
             continue
         name = stub.get("name")
+        # Every identity-bound managed server is admitted ONLY in the gateway's
+        # session-bound stub shape. This covers the ones in ``identity_mounted``
+        # too (their spec half is re-derived, not withheld), so a look-alike
+        # cannot slip through simply because its name is not in ``withheld``.
+        if name in identity_bound_crew_servers() and not (
+            admit_identity_stubs
+            and name in _OPENCODE_STUB_ADMISSIBLE_IDENTITY
+            and is_session_bound_broker_stub(stub, session_token, str(name))
+        ):
+            logger.warning(
+                "%s session MCP: withholding pooled stub %r -- an identity-bound "
+                "server is mounted only as the gateway's session-bound stub",
+                label,
+                name,
+            )
+            continue
         # The work-ledger stub is the gateway's, bound by the stub token the broker
         # checks on every call, so it is admitted in that exact shape only.
         admissible = (
-            admit_work_ledger_stub
-            and name not in unhonoured
-            and is_session_bound_work_ledger_stub(stub, session_token)
+            name not in unhonoured
+            and (
+                (
+                    admit_work_ledger_stub
+                    and is_session_bound_work_ledger_stub(stub, session_token)
+                )
+                or (
+                    admit_identity_stubs
+                    and name in identity_bound_crew_servers()
+                    and is_session_bound_broker_stub(stub, session_token, str(name))
+                )
+            )
         )
         if name in withheld and not admissible:
             logger.warning(
@@ -670,6 +725,7 @@ def opencode_projection(
         identity_mounted=_OPENCODE_IDENTITY_SERVERS,
         identity_names=_OPENCODE_IDENTITY_NAMES,
         admit_work_ledger_stub=True,
+        admit_identity_stubs=True,
     )
     return SessionProjection(
         params={"mcpServers": out},

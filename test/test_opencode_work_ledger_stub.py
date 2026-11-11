@@ -191,6 +191,24 @@ def test_a_switched_off_tool_is_denied_on_the_stub_or_the_stub_is_withheld(agent
     assert _WORK not in _mounted([_stub()], denies_in_force=())
 
 
+@pytest.mark.parametrize("server", ["kirocrew-panel", "kirocrew-dashboard"])
+def test_an_identity_bound_member_stub_is_mounted(agents_dir, server):
+    """The dashboard and panel have no spec-shaped form that carries identity.
+
+    Their only working element on this transport is the gateway's session-bound
+    broker stub; withholding it because the spec entry is withheld left the
+    member with no dashboard or page tools at all.
+    """
+    _grant(agents_dir, server)
+    assert server in _mounted([_stub(server)])
+
+
+@pytest.mark.parametrize("server", ["kirocrew-panel", "kirocrew-dashboard"])
+def test_an_identity_bound_look_alike_stays_withheld(agents_dir, server):
+    _grant(agents_dir, server)
+    assert server not in _mounted([_stub(server, token="session-token-b")])
+
+
 def test_every_other_identity_bound_stub_stays_withheld(agents_dir):
     others = sorted(identity_bound_crew_servers() - {_WORK})
     assert others
@@ -204,7 +222,20 @@ def test_every_other_identity_bound_stub_stays_withheld(agents_dir):
         stubs.append(renamed)
     mounted = _mounted(stubs)
     assert _WORK in mounted
-    assert not set(others) & set(mounted)
+    # The member-scoped identity servers have no other working form on this
+    # transport, so their genuine session-bound stubs are admitted.
+    safe = {
+        "kirocrew-guide",
+        "kirocrew-mate",
+        "kirocrew-crew-log",
+        "kirocrew-dashboard",
+        "kirocrew-panel",
+    }
+    assert safe <= set(mounted)
+    # The ones that are NOT member-scoped stay withheld, and a renamed
+    # work-ledger stub under any other name is never admitted either.
+    for name in set(others) - safe:
+        assert name not in mounted
 
 
 def test_the_admission_is_opencode_only(agents_dir):
